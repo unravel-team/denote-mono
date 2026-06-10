@@ -1,0 +1,33 @@
+;;; How to start a development REPL: `clojure -M:dev:test`
+{:deps {org.clojure/clojure {:mvn/version "1.12.0"}}
+ :aliases
+ {:dev
+  {:extra-deps
+   {;; Bases
+    denote-mono/cli {:local/root "bases/cli"}}
+   :extra-paths ["development/src"]}
+
+  :test
+  {:extra-deps {io.github.cognitect-labs/test-runner
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                org.clojure/test.check {:mvn/version "1.1.1"}}
+   :extra-paths ["bases/cli/test"
+                 "projects/denote-cli/test"]
+   :main-opts ["-m" "cognitect.test-runner"
+               "-d" "bases/cli/test"
+               "-d" "projects/denote-cli/test"]}
+
+  ;; Example command: clojure -M:poly info
+  :poly
+  {:extra-deps {polyfy/polylith
+                {:deps/root "projects/poly"
+                 :git/sha "6a8a2cb9be68044305c4d29b8d284456502d5c1e"
+                 :git/url "https://github.com/polyfy/polylith"}}
+   :main-opts ["-m" "polylith.clj.core.poly-cli.core"]}
+
+  ;; Build with: clojure -T:build uberjar :project denote-cli
+  :build
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.5"}
+          io.github.seancorfield/build-clj {:git/tag "v0.9.2"
+                                            :git/sha "9c9f078"}}
+   :ns-default build}}}
