@@ -387,7 +387,7 @@ Implementation:
 
 - Prefer `fd --type f` if present; do not pass `--hidden` by default because `fd` already hides dotfiles. Apply Denote filters in Clojure after tool output.
 - Always ignore dot directories like Denote does.
-- Follow configured symlink policy; default should match Denote's recursive walker (`directory-files-recursively` follows symlinks) while preserving [tag:silo_path_containment].
+- Follow configured symlink policy; default should match Denote's recursive walker (`directory-files-recursively` follows symlinks) while preserving [ref:silo_path_containment].
 - Include readable regular files only.
 - Skip Emacs/OS backup files by default.
 - Apply `:excluded-directories-regex` during walk and `:excluded-files-regex` after candidate collection.
@@ -705,7 +705,7 @@ Public API:
 (backup-file? path)
 ```
 
-Should hide Java NIO, symlink, dot-directory, backup-file, exclusion-regex, readable-regular-file, and external `fd` fallback details from higher layers. All mutation entrypoints must enforce [tag:silo_path_containment].
+Should hide Java NIO, symlink, dot-directory, backup-file, exclusion-regex, readable-regular-file, and external `fd` fallback details from higher layers. All mutation entrypoints must enforce [ref:silo_path_containment].
 
 ### 10.6 `silo`
 
