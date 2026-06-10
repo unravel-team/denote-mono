@@ -7,26 +7,24 @@ usable from the shell: list, filter, search, create, rename, and organize
 notes into Folgezettel hierarchies, all composable with Unix pipelines.
 
 The repository is a [Polylith](https://polylith.gitbook.io/) workspace.
-The full design, including compatibility guarantees with Emacs Denote and
-intentional CLI divergences, lives in `docs/implementation-spec.md`.
 
 ## Prerequisites
 
 Required to build and test:
 
-| Tool | Why | Install (macOS) |
-|---|---|---|
-| Java 11+ (JDK) | runtime and uberjar build | `brew install openjdk` |
+| Tool                                                      | Why                                 | Install (macOS)                      |
+|-----------------------------------------------------------|-------------------------------------|--------------------------------------|
+| Java 11+ (JDK)                                            | runtime and uberjar build           | `brew install openjdk`               |
 | [Clojure CLI](https://clojure.org/guides/install_clojure) | dependency resolution, tests, build | `brew install clojure/tools/clojure` |
-| GNU make | task runner | preinstalled / `brew install make` |
+| GNU make                                                  | task runner                         | preinstalled / `brew install make`   |
 
 Required only for `make check` (linting and formatting gates):
 
-| Tool | Why |
-|---|---|
-| [clj-kondo](https://github.com/clj-kondo/clj-kondo) | static analysis |
-| [zprint](https://github.com/kkinnear/zprint) | formatting (`~/.zprint.edn` must contain `{:search-config? true}`) |
-| [tagref](https://github.com/stepchowfun/tagref) | cross-file invariant tags |
+| Tool                                                | Why                                                                |
+|-----------------------------------------------------|--------------------------------------------------------------------|
+| [clj-kondo](https://github.com/clj-kondo/clj-kondo) | static analysis                                                    |
+| [zprint](https://github.com/kkinnear/zprint)        | formatting (`~/.zprint.edn` must contain `{:search-config? true}`) |
+| [tagref](https://github.com/stepchowfun/tagref)     | cross-file invariant tags                                          |
 
 Optional at runtime (the CLI degrades gracefully without them):
 
@@ -48,8 +46,9 @@ The build produces `projects/denote-cli/target/denote-cli-vX.Y.Z-standalone.jar`
 Give it a convenient entry point:
 
 ```sh
-# in your shell profile
-alias denote='java -jar /path/to/denote-mono/projects/denote-cli/target/denote-cli-v0.1.26-standalone.jar'
+# in your shell profile (check target/ for the exact version)
+alias denote='java -jar /path/to/denote-mono/projects/denote-cli/target/denote-cli-v0.2.29-standalone.jar'
+denote --version   # => denote v0.2.29
 ```
 
 Alternatively, run straight from source without building a jar:
@@ -177,6 +176,7 @@ d silo doctor
 
 ```text
 denote [--silo NAME] [--root PATH] [--config PATH] COMMAND [OPTIONS]
+denote --version | version    Print the tool version
 
 list             List notes (--match --keyword --signature --title --id;
                  --sort identifier|title|keywords|signature|modified|random;

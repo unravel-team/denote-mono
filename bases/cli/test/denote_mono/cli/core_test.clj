@@ -50,6 +50,15 @@
       (is (= 2 exit))
       (is (str/includes? out "Unknown command: frobnicate")))))
 
+(deftest version-command
+  (testing "--version and the version command print the tool version"
+    (doseq [args [["--version"] ["version"]]]
+      (let [{:keys [exit out]} (cli/run args *harness*)]
+        (is (zero? exit))
+        ;; From source there is no embedded version resource, so this
+        ;; reports the dev placeholder; built jars embed vX.Y.Z.
+        (is (re-matches #"denote (dev|v\d+\.\d+\.\d+)" out))))))
+
 (deftest list-command
   (testing "default silo listing, relative paths, sorted by identifier"
     (let [{:keys [exit out]} (run-cli "list")]

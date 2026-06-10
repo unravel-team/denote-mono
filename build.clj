@@ -123,10 +123,30 @@
   (doseq [path ["target" "projects/denote-cli/target"]]
     (b/delete {:path path})))
 
+(defn- write-version-resources
+  "Embed the computed version in the jar for `denote --version`, plus a
+  native-image resource config so the file also lands in native binaries."
+  [project-root class-dir version]
+  (let
+    [version-file (io/file project-root class-dir "denote_mono/version.txt")
+     config-file
+       (io/file
+         project-root
+         class-dir
+         "META-INF/native-image/denote-mono/denote-cli/resource-config.json")]
+    (io/make-parents version-file)
+    (spit version-file version)
+    (io/make-parents config-file)
+    (spit config-file
+          (str "{\"resources\":{\"includes\":"
+               "[{\"pattern\":\"denote_mono/version.txt\"}]}}\n"))))
+
 (defn uberjar
   "Build an uberjar for the specified project."
   [opts]
-  (let [{:keys [project-root uber-file], :as build-opts} (uber-opts opts)]
+  (let [{:keys [project-root uber-file class-dir version], :as build-opts}
+          (uber-opts opts)]
+    (write-version-resources project-root class-dir version)
     (b/with-project-root project-root
                          (bb/uber build-opts)
                          (println "Uberjar is built:" uber-file)

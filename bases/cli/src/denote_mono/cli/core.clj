@@ -3,6 +3,7 @@
   Handlers return {:exit CODE :out STRING}; printing and System/exit live
   only in -main."
   (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.cli :as tools-cli]
             [denote-mono.cli.completions :as completions]
@@ -35,6 +36,7 @@ Global options:
   --silo NAME      Operate on the named silo
   --root PATH      Operate on an explicit root directory
   --config PATH    Use a specific config file
+  --version        Print version and exit
 
 Commands:
   list             List notes (filters: --match --keyword --signature
@@ -68,7 +70,18 @@ Commands:
 
 (def ^:private global-options
   [[nil "--silo NAME" "Silo name"] [nil "--root PATH" "Explicit root directory"]
-   [nil "--config PATH" "Config file path"] ["-h" "--help" "Show help"]])
+   [nil "--config PATH" "Config file path"]
+   [nil "--version" "Print version and exit"] ["-h" "--help" "Show help"]])
+
+(defn- version-string
+  "Version embedded at build time (see build.clj); \"dev\" when running
+  from source."
+  []
+  (str "denote "
+       (or (some-> (io/resource "denote_mono/version.txt")
+                   slurp
+                   str/trim)
+           "dev")))
 
 (def ^:private list-options
   [[nil "--match REGEX" "Filter by basename regex"]
@@ -653,6 +666,8 @@ Commands:
          [command & command-args] arguments]
      (try
        (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+             (or (:version options) (= "version" command))
+               {:exit (exit-codes :success), :out (version-string)}
              (or (nil? command) (:help options) (= "help" command))
                {:exit (exit-codes :success), :out help-text}
              (= command "silo") (handle-silo options harness command-args)

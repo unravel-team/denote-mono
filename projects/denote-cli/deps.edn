@@ -17,4 +17,4 @@
         org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases {:uberjar {:main denote-mono.cli.core
                      :major-version 0
-                     :minor-version 1}}}
+                     :minor-version 2}}}
