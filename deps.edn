@@ -11,6 +11,7 @@
     denote-mono/filesystem {:local/root "components/filesystem"}
     denote-mono/front-matter {:local/root "components/front_matter"}
     denote-mono/process {:local/root "components/process"}
+    denote-mono/rename {:local/root "components/rename"}
     denote-mono/search {:local/root "components/search"}
     denote-mono/silo {:local/root "components/silo"}
     denote-mono/slug {:local/root "components/slug"}
@@ -30,6 +31,7 @@
                  "components/filesystem/test"
                  "components/front_matter/test"
                  "components/process/test"
+                 "components/rename/test"
                  "components/search/test"
                  "components/silo/test"
                  "components/slug/test"
@@ -43,6 +45,7 @@
                "-d" "components/filesystem/test"
                "-d" "components/front_matter/test"
                "-d" "components/process/test"
+               "-d" "components/rename/test"
                "-d" "components/search/test"
                "-d" "components/silo/test"
                "-d" "components/slug/test"
