@@ -13,11 +13,22 @@
 (def ^:private follow (make-array LinkOption 0))
 
 (defn canonical
-  "Real path of S when it exists, else the normalized absolute path."
+  "Real path of S. When S does not exist, the longest existing ancestor is
+  resolved to its real path and the remaining segments are appended, so
+  containment checks behave the same for planned and existing paths."
   [s]
-  (let [p (.toAbsolutePath (to-path s))]
-    (str (try (.toRealPath p follow)
-              (catch java.io.IOException _ (.normalize p))))))
+  (let [p (.normalize (.toAbsolutePath (to-path s)))]
+    (loop [existing p
+           remainder nil]
+      (if (or (nil? existing) (Files/exists existing no-follow))
+        (let [real (if existing
+                     (try (.toRealPath existing follow)
+                          (catch java.io.IOException _ existing))
+                     (.getRoot p))]
+          (str (if remainder (.resolve ^Path real ^Path remainder) real)))
+        (recur (.getParent existing)
+               (let [name (.getFileName existing)]
+                 (if remainder (.resolve ^Path name ^Path remainder) name)))))))
 
 (defn inside-root?
   "True when PATH resolves inside ROOT after canonicalization.
