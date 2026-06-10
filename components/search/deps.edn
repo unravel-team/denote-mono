@@ -1,0 +1,5 @@
+{:paths ["src"]
+ :deps {denote-mono/file-type {:local/root "../file_type"}
+        denote-mono/filename {:local/root "../filename"}
+        denote-mono/filesystem {:local/root "../filesystem"}
+        denote-mono/process {:local/root "../process"}}}

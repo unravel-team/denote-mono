@@ -5,10 +5,12 @@
   {:extra-deps
    {;; Components
     denote-mono/config {:local/root "components/config"}
+    denote-mono/editor {:local/root "components/editor"}
     denote-mono/file-type {:local/root "components/file_type"}
     denote-mono/filename {:local/root "components/filename"}
     denote-mono/filesystem {:local/root "components/filesystem"}
     denote-mono/process {:local/root "components/process"}
+    denote-mono/search {:local/root "components/search"}
     denote-mono/silo {:local/root "components/silo"}
     denote-mono/slug {:local/root "components/slug"}
 
@@ -21,20 +23,24 @@
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}}
    :extra-paths ["components/config/test"
+                 "components/editor/test"
                  "components/file_type/test"
                  "components/filename/test"
                  "components/filesystem/test"
                  "components/process/test"
+                 "components/search/test"
                  "components/silo/test"
                  "components/slug/test"
                  "bases/cli/test"
                  "projects/denote-cli/test"]
    :main-opts ["-m" "cognitect.test-runner"
                "-d" "components/config/test"
+               "-d" "components/editor/test"
                "-d" "components/file_type/test"
                "-d" "components/filename/test"
                "-d" "components/filesystem/test"
                "-d" "components/process/test"
+               "-d" "components/search/test"
                "-d" "components/silo/test"
                "-d" "components/slug/test"
                "-d" "bases/cli/test"
