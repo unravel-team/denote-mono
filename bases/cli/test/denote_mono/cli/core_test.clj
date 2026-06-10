@@ -84,6 +84,31 @@
   (testing "open runs the editor (EDITOR=true) and succeeds"
     (is (zero? (:exit (run-cli "open" "alpha"))))))
 
+(deftest find-fzf-command
+  ;; head -1 stands in for fzf: it "selects" the first candidate line.
+  (let [fzf-config (str (temp-dir "denote-cli-fzf") "/config.edn")
+        base (read-string (slurp *config-path*))]
+    (spit fzf-config (pr-str (assoc base :tools {:fzf ["head" "-1"]})))
+    (testing "--fzf narrows to the selector's choice"
+      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "find" "--fzf"]
+                                        *harness*)]
+        (is (zero? exit))
+        (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
+    (testing "a cancelling selector exits with no-match"
+      (spit fzf-config (pr-str (assoc base :tools {:fzf ["false"]})))
+      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "find" "--fzf"]
+                                        *harness*)]
+        (is (= 6 exit))
+        (is (str/includes? out "cancelled"))))
+    (testing "missing selector falls back to all matches"
+      (spit fzf-config
+            (pr-str (assoc base
+                      :tools {:fzf ["definitely-not-a-real-tool-xyz"]})))
+      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "find" "--fzf"]
+                                        *harness*)]
+        (is (zero? exit))
+        (is (= 2 (count (str/split-lines out))))))))
+
 (deftest rename-command
   (testing "dry-run prints the plan and leaves the file alone"
     (let [{:keys [exit out]}
@@ -109,6 +134,33 @@
                           "/20240101T000000--renamed__clojure.org"))))))
   (testing "file outside silo exits with validation code"
     (is (= 3 (:exit (run-cli "rename" "/etc/hosts" "--title" "x"))))))
+
+(deftest rename-break-links-command
+  (spit (str *notes-root* "/20240101T000000--alpha__clojure.org")
+        "Linking to [[denote:20240102T000000][beta]].\n")
+  (let [beta (str *notes-root* "/20240102T000000--beta__notes.org")]
+    (testing "identifier change with backlinks is refused"
+      (let [{:keys [exit out]} (run-cli "rename" beta
+                                        "--id" "20300101T000000"
+                                        "--front-matter" "none")]
+        (is (= 3 exit))
+        (is (str/includes? out "--break-links"))
+        (is (str/includes? out "alpha"))
+        (is (.exists (java.io.File. ^String beta)))))
+    (testing "--break-links allows it"
+      (is (zero? (:exit (run-cli "rename"
+                                 beta
+                                 "--id"
+                                 "20300101T000000" "--front-matter"
+                                 "none" "--break-links"))))
+      (is (.exists (java.io.File. (str *notes-root*
+                                       "/20300101T000000--beta__notes.org")))))
+    (testing "title-only renames are unaffected by the guard"
+      (is (zero? (:exit (run-cli "rename"
+                                   (str *notes-root*
+                                        "/20240101T000000--alpha__clojure.org")
+                                 "--title" "alpha-two"
+                                 "--front-matter" "none")))))))
 
 (deftest rename-many-command
   (testing "without --yes prints plan and asks for confirmation"
@@ -211,6 +263,37 @@
                                      "alphanumeric"
                                      "--dry-run")]
           (is (str/includes? out "==2--beta")))))))
+
+(deftest seq-tree-command
+  (run-cli "seq" "new" "parent" "--title" "one" "--date" "2025-01-01 00:00:00")
+  (run-cli "seq" "new"
+           "child" "1"
+           "--title" "one-one"
+           "--date" "2025-01-02 00:00:00")
+  (run-cli "seq" "new"
+           "child" "1=1"
+           "--title" "one-one-one"
+           "--date" "2025-01-03 00:00:00")
+  (run-cli "seq" "new" "parent" "--title" "two" "--date" "2025-01-04 00:00:00")
+  (testing "tree indents children under parents"
+    (let [{:keys [exit out]} (run-cli "seq" "tree")]
+      (is (zero? exit))
+      (is (= ["1  20250101T000000==1--one.org"
+              "  1=1  20250102T000000==1=1--one-one.org"
+              "    1=1=1  20250103T000000==1=1=1--one-one-one.org"
+              "2  20250104T000000==2--two.org"]
+             (str/split-lines out)))))
+  (testing "--prefix rebases indentation on the subtree"
+    (let [{:keys [out]} (run-cli "seq" "tree" "--prefix" "1=1")]
+      (is (= ["1=1  20250102T000000==1=1--one-one.org"
+              "  1=1=1  20250103T000000==1=1=1--one-one-one.org"]
+             (str/split-lines out)))))
+  (testing "--depth limits the tree"
+    (let [{:keys [out]} (run-cli "seq" "tree" "--depth" "2")]
+      (is (= ["1  20250101T000000==1--one.org"
+              "  1=1  20250102T000000==1=1--one-one.org"
+              "2  20250104T000000==2--two.org"]
+             (str/split-lines out))))))
 
 (deftest seq-reparent-command
   ;; build a small hierarchy: 1, 1=1, and 2; reparent 2 under 1

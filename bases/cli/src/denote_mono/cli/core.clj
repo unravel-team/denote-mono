@@ -9,6 +9,7 @@
             [denote-mono.editor.interface :as editor]
             [denote-mono.filename.interface :as filename]
             [denote-mono.note.interface :as note]
+            [denote-mono.process.interface :as process]
             [denote-mono.rename.interface :as rename]
             [denote-mono.search.interface :as search]
             [denote-mono.sequence.interface :as sequence]
@@ -37,13 +38,14 @@ Global options:
 Commands:
   list             List notes (filters: --match --keyword --signature
                    --title --id; output: --sort --json --edn --print0)
-  find [QUERY]     Filter notes by query; prints paths (--open opens them)
-  open [QUERY]     Open matching note in $EDITOR
+  find [QUERY]     Filter notes by query; prints paths (--open opens them,
+                   --fzf selects interactively)
+  open [QUERY]     Open matching note in $EDITOR (fzf narrows on a TTY)
   grep QUERY       Search note contents (rg-accelerated when available)
   backlinks ID|F   Notes linking to the given note
   links FILE_OR_ID Outgoing denote: links of a note
   rename FILE      Rename one note (--title --keyword --signature --id
-                   --date --front-matter MODE --dry-run --yes)
+                   --date --front-matter MODE --break-links --dry-run --yes)
   rename-many F... Batch rename (--add-keyword --remove-keyword
                    --replace-keywords KW,KW --from-front-matter
                    --dry-run --yes)
@@ -52,7 +54,8 @@ Commands:
   seq validate SEQ [--scheme S]
   seq next parent|child SEQ|sibling SEQ
   seq new parent|child SEQ|sibling SEQ [new options]
-  seq list [--prefix SEQ]
+  seq list [--prefix SEQ] [--depth N]
+  seq tree [--prefix SEQ] [--depth N]
   seq convert FILE... --to SCHEME [--dry-run --yes]
   seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
   seq as-parent FILE [--dry-run]
@@ -75,7 +78,9 @@ Commands:
    [nil "--json" "JSON-lines output"] [nil "--edn" "EDN output"]
    [nil "--print0" "NUL-delimited output"]])
 
-(def ^:private find-options [[nil "--open" "Open the selection in the editor"]])
+(def ^:private find-options
+  [[nil "--open" "Open the selection in the editor"]
+   [nil "--fzf" "Select interactively with fzf"]])
 
 (def ^:private rename-options
   [[nil "--title TITLE" "New title; empty string removes"]
@@ -86,6 +91,7 @@ Commands:
    [nil "--date DATE" "Date for generated identifier and front matter"]
    [nil "--front-matter MODE" "sync, update-existing, add, or none" :parse-fn
     keyword] [nil "--dry-run" "Print the plan without applying it"]
+   [nil "--break-links" "Allow identifier changes that break backlinks"]
    [nil "--yes" "Apply without confirmation"]])
 
 (def ^:private rename-many-options
@@ -138,22 +144,43 @@ Commands:
                       (search/sort-notes (keyword (:sort options)) {}))]
         {:exit (exit-codes :success), :out (render-notes notes options)}))))
 
+(defn- interactive-tty?
+  "True when this process is attached to a terminal the user can interact
+  with (fzf needs one)."
+  []
+  (some? (System/console)))
+
+(defn- fzf-select
+  "Narrow NOTES with the configured fzf selector. Returns the selection,
+  nil when the user cancelled, or NOTES unchanged when the selector is not
+  available."
+  [context notes]
+  (let [fzf-argv (get-in context [:config :tools :fzf] ["fzf"])]
+    (if (process/available? (first fzf-argv))
+      (when-let [chosen (process/select (map :relative-path notes) fzf-argv)]
+        (filterv (comp (set chosen) :relative-path) notes))
+      notes)))
+
 (defn- find-notes
-  "Shared body for find/open: query, then print or launch the editor."
-  [context query open?]
+  "Shared body for find/open: query, narrow with fzf when requested (or on
+  an interactive terminal), then print or launch the editor."
+  [context query {:keys [open? fzf?]}]
   (let [notes (search/sort-notes (search/list-notes context {:query query} {})
                                  :identifier
-                                 {})]
-    (cond (empty? notes) {:exit (exit-codes :no-match),
-                          :out "No matching notes"}
-          open? (let [{:keys [exit]} (editor/open (map :path notes)
-                                                  (assoc context
-                                                    :inherit-io? true))]
-                  {:exit
-                   (if (zero? exit) (exit-codes :success) (exit-codes :tool)),
-                   :out ""})
-          :else {:exit (exit-codes :success),
-                 :out (str/join "\n" (map :relative-path notes))})))
+                                 {})
+        notes (if (and (seq notes) (or fzf? (and open? (interactive-tty?))))
+                (fzf-select context notes)
+                notes)]
+    (cond
+      (nil? notes) {:exit (exit-codes :no-match), :out "Selection cancelled"}
+      (empty? notes) {:exit (exit-codes :no-match), :out "No matching notes"}
+      open? (let [{:keys [exit]} (editor/open (map :path notes)
+                                              (assoc context
+                                                :inherit-io? true))]
+              {:exit (if (zero? exit) (exit-codes :success) (exit-codes :tool)),
+               :out ""})
+      :else {:exit (exit-codes :success),
+             :out (str/join "\n" (map :relative-path notes))})))
 
 (defn- handle-find
   [context args]
@@ -161,9 +188,19 @@ Commands:
                                                                  find-options)]
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (find-notes context (first arguments) (:open options)))))
+      (find-notes context
+                  (first arguments)
+                  {:open? (:open options), :fzf? (:fzf options)}))))
 
-(defn- handle-open [context args] (find-notes context (first args) true))
+(defn- handle-open
+  [context args]
+  (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
+                                                                 find-options)]
+    (if errors
+      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (find-notes context
+                  (first arguments)
+                  {:open? true, :fzf? (:fzf options)}))))
 
 (defn- resolve-note-path
   "Resolve FILE-OR-ID to a note path: an identifier looks the note up in
@@ -254,25 +291,46 @@ Commands:
       {:exit (exit-codes :success),
        :out (str "Renamed " (count applied) " file(s)")})))
 
+(defn- guard-broken-links!
+  "Refuse identifier changes that would break existing backlinks, unless
+  --break-links was passed. Throws ex-info {:type :validation} naming the
+  affected notes."
+  [context plans options]
+  (when-not (:break-links options)
+    (doseq [{:keys [source old new]} plans
+            :let [old-id (:identifier old)]
+            :when (and old-id (not= old-id (:identifier new)))]
+      (when-let [linking (seq (search/backlinks context old-id {}))]
+        (throw (ex-info (str source
+                             " has " (count linking)
+                             " backlink(s) to " old-id
+                             "; pass --break-links to rename anyway:\n"
+                               (str/join "\n" (map :relative-path linking)))
+                        {:type :validation, :identifier old-id}))))))
+
 (defn- handle-rename
   [context args]
   (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
                                                                  rename-options)
         file (first arguments)]
-    (cond
-      errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (nil? file) {:exit (exit-codes :usage),
-                   :out "Usage: denote rename FILE [OPTIONS]"}
-      :else
-        (let [plan (rename/plan-rename file
-                                       (options->changes options)
-                                       context
-                                       {:front-matter (:front-matter options)})]
-          (if (:dry-run options)
-            {:exit (exit-codes :success), :out (render-plan plan)}
-            (let [applied (rename/apply-plan (rename/validate-plan plan {}) {})]
-              {:exit (exit-codes :success),
-               :out (str (:source applied) " -> " (:destination applied))}))))))
+    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+          (nil? file) {:exit (exit-codes :usage),
+                       :out "Usage: denote rename FILE [OPTIONS]"}
+          :else (let [plan (rename/plan-rename file
+                                               (options->changes options)
+                                               context
+                                               {:front-matter (:front-matter
+                                                                options)})]
+                  (if (:dry-run options)
+                    {:exit (exit-codes :success), :out (render-plan plan)}
+                    (do (guard-broken-links! context [plan] options)
+                        (let [applied (rename/apply-plan
+                                        (rename/validate-plan plan {})
+                                        {})]
+                          {:exit (exit-codes :success),
+                           :out (str (:source applied)
+                                     " -> "
+                                     (:destination applied))})))))))
 
 (defn- batch-changes-from-options
   [options]
@@ -306,7 +364,8 @@ Commands:
                        :out (str table
                                  "\nRe-run with --yes to apply, or --dry-run "
                                  "to preview.")}
-                    :else (apply-batch-and-report plans))))))
+                    :else (do (guard-broken-links! context plans options)
+                              (apply-batch-and-report plans)))))))
 
 (defn- new-changes-from-options
   [options]
@@ -332,11 +391,12 @@ Commands:
             {:exit (exit-codes :success), :out (:path created)}))))))
 
 (defn- silo-sequences
-  "All valid sequences among the silo's notes, with their paths.
-  Returns {:sequences [...] :by-sequence {sequence path}}."
+  "All valid sequences among the silo's notes, with their notes.
+  Returns {:sequences [...] :by-sequence {sequence note-record}}."
   [context]
-  (let [pairs (keep (fn [{:keys [path]}]
-                      (when-let [s (sequence/file-sequence path)] [s path]))
+  (let [pairs (keep (fn [note]
+                      (when-let [s (sequence/file-sequence (:path note))]
+                        [s note]))
                     (search/list-notes context {} {}))]
     {:sequences (mapv first pairs), :by-sequence (into {} pairs)}))
 
@@ -371,8 +431,18 @@ Commands:
          :parse-fn keyword]
         [nil "--to SCHEME" "Target scheme for convert" :parse-fn keyword]
         [nil "--prefix SEQ" "Restrict to sequences under this prefix"]
+        [nil "--depth N" "Restrict to sequences up to this depth" :parse-fn
+         parse-long]
         [nil "--recursive" "Also reparent descendants"]
         [nil "--yes" "Apply without confirmation"]))
+
+(defn- selected-sequences
+  "Filter SEQUENCES by the --prefix and --depth seq options."
+  [sequences options scheme]
+  (cond->> sequences
+    (:prefix options)
+      (#(sequence/sequences-with-prefix % (:prefix options) scheme))
+    (:depth options) (filter #(<= (sequence/depth %) (:depth options)))))
 
 (defn- handle-seq
   [context args]
@@ -416,15 +486,27 @@ Commands:
                   {:exit (exit-codes :usage),
                    :out "Usage: denote seq new parent|child SEQ|sibling SEQ"}))
         "list" (let [{:keys [sequences by-sequence]} (silo-sequences context)
-                     selected (if-let [prefix (:prefix options)]
-                                (sequence/sequences-with-prefix sequences
-                                                                prefix
-                                                                scheme)
-                                sequences)]
+                     selected (selected-sequences sequences options scheme)]
+                 {:exit (exit-codes :success),
+                  :out (str/join
+                         "\n"
+                         (map #(str % "\t" (:relative-path (by-sequence %)))
+                           (sequence/sort-sequences selected)))})
+        "tree" (let [{:keys [sequences by-sequence]} (silo-sequences context)
+                     selected (selected-sequences sequences options scheme)
+                     base-depth (if-let [prefix (:prefix options)]
+                                  (sequence/depth prefix)
+                                  1)]
                  {:exit (exit-codes :success),
                   :out (str/join "\n"
-                                 (map #(str % "\t" (by-sequence %))
-                                   (sequence/sort-sequences selected)))})
+                                 (for [s (sequence/sort-sequences selected)
+                                       :let [indent (max 0
+                                                         (- (sequence/depth s)
+                                                            base-depth))]]
+                                   (str (apply str (repeat indent "  "))
+                                        s
+                                        "  "
+                                        (:relative-path (by-sequence s)))))})
         "convert" (let [target (:to options)
                         files rest-args]
                     (if (and target (seq files))
@@ -458,7 +540,7 @@ Commands:
                                                                   :all-children
                                                                   scheme)]
                                 (rename/plan-rename
-                                  (by-sequence descendant)
+                                  (:path (by-sequence descendant))
                                   {:signature (str new-sequence
                                                    (subs descendant
                                                          (count old-sequence)))}
