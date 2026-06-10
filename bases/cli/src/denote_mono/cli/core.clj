@@ -5,6 +5,7 @@
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.tools.cli :as tools-cli]
+            [denote-mono.cli.completions :as completions]
             [denote-mono.config.interface :as config]
             [denote-mono.editor.interface :as editor]
             [denote-mono.filename.interface :as filename]
@@ -62,6 +63,7 @@ Commands:
   silo list        List configured silos
   silo path [NAME] Print the path of a silo
   silo doctor      Check that configured silos exist
+  completions SH   Print a completion script for bash, zsh, or fish
   help             Show this help text.")
 
 (def ^:private global-options
@@ -436,6 +438,45 @@ Commands:
         [nil "--recursive" "Also reparent descendants"]
         [nil "--yes" "Apply without confirmation"]))
 
+(def ^:private command-spec
+  "Command surface used for dispatch documentation and completion scripts."
+  [{:name "list", :description "List notes", :options list-options}
+   {:name "find", :description "Filter notes by query", :options find-options}
+   {:name "open",
+    :description "Open matching notes in the editor",
+    :options find-options}
+   {:name "grep", :description "Search note contents", :options []}
+   {:name "backlinks",
+    :description "Notes linking to the given note",
+    :options []}
+   {:name "links", :description "Outgoing links of a note", :options []}
+   {:name "rename", :description "Rename one note", :options rename-options}
+   {:name "rename-many",
+    :description "Batch rename notes",
+    :options rename-many-options}
+   {:name "new", :description "Create a note", :options new-options}
+   {:name "seq",
+    :description "Folgezettel sequence operations",
+    :options seq-options,
+    :subcommands ["as-parent" "convert" "list" "new" "next" "reparent" "tree"
+                  "validate"]}
+   {:name "silo",
+    :description "Silo operations",
+    :options [],
+    :subcommands ["doctor" "list" "path"]}
+   {:name "completions",
+    :description "Print a shell completion script",
+    :options [],
+    :subcommands ["bash" "fish" "zsh"]}
+   {:name "help", :description "Show help", :options []}])
+
+(defn- handle-completions
+  [args]
+  (if-let [script (completions/script (first args) command-spec global-options)]
+    {:exit (exit-codes :success), :out script}
+    {:exit (exit-codes :usage),
+     :out "Usage: denote completions bash|zsh|fish"}))
+
 (defn- selected-sequences
   "Filter SEQUENCES by the --prefix and --depth seq options."
   [sequences options scheme]
@@ -635,6 +676,7 @@ Commands:
                                                command-args)
              (= command "seq") (handle-seq (make-context options harness)
                                            command-args)
+             (= command "completions") (handle-completions command-args)
              :else {:exit (exit-codes :usage),
                     :out (str "Unknown command: " command "\n\n" help-text)})
        (catch clojure.lang.ExceptionInfo e

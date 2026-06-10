@@ -2,7 +2,8 @@
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [denote-mono.cli.core :as cli])
+            [denote-mono.cli.core :as cli]
+            [denote-mono.process.interface :as process])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
 
@@ -312,6 +313,42 @@
         (is (.exists (java.io.File. (str
                                       *notes-root*
                                       "/20250103T000000==1=2--two.org"))))))))
+
+(deftest completions-command
+  (testing "bash script covers commands and flags, and parses with bash -n"
+    (let [{:keys [exit out]} (run-cli "completions" "bash")]
+      (is (zero? exit))
+      (is (str/includes? out "complete -o default -F _denote denote"))
+      (is (str/includes? out "rename-many"))
+      (is (str/includes? out "--break-links"))
+      (is (str/includes? out "as-parent"))
+      (let [script (str (temp-dir "denote-completions") "/denote.bash")]
+        (spit script out)
+        (is (zero? (:exit (process/run ["bash" "-n" script])))))))
+  (testing "zsh script has compdef header and parses with zsh -n"
+    (let [{:keys [exit out]} (run-cli "completions" "zsh")]
+      (is (zero? exit))
+      (is (str/starts-with? out "#compdef denote"))
+      (is (str/includes? out "'rename:Rename one note'"))
+      (is (str/includes? out "'--break-links["))
+      (let [script (str (temp-dir "denote-completions") "/_denote")]
+        (spit script out)
+        (is (zero? (:exit (process/run ["zsh" "-n" script])))))))
+  (testing "fish script registers subcommands and flags"
+    (let [{:keys [exit out]} (run-cli "completions" "fish")]
+      (is (zero? exit))
+      (is (str/includes? out "complete -c denote -n __fish_use_subcommand"))
+      (is
+        (str/includes?
+          out
+          "complete -c denote -n '__fish_seen_subcommand_from rename' -l break-links"))
+      (when (process/available? "fish")
+        (let [script (str (temp-dir "denote-completions") "/denote.fish")]
+          (spit script out)
+          (is (zero? (:exit (process/run ["fish" "-n" script]))))))))
+  (testing "unknown shell exits with usage code"
+    (is (= 2 (:exit (run-cli "completions" "powershell"))))
+    (is (= 2 (:exit (run-cli "completions"))))))
 
 (deftest silo-commands
   (testing "silo list shows names and paths"
