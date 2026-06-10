@@ -1,2 +1,10 @@
 {:paths ["src"]
- :deps {}}
+ :deps {denote-mono/config {:local/root "../../components/config"}
+        denote-mono/editor {:local/root "../../components/editor"}
+        denote-mono/filename {:local/root "../../components/filename"}
+        denote-mono/filesystem {:local/root "../../components/filesystem"}
+        denote-mono/process {:local/root "../../components/process"}
+        denote-mono/search {:local/root "../../components/search"}
+        denote-mono/silo {:local/root "../../components/silo"}
+        org.clojure/data.json {:mvn/version "2.5.0"}
+        org.clojure/tools.cli {:mvn/version "1.1.230"}}}

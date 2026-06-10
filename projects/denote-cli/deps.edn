@@ -1,4 +1,13 @@
 {:deps {denote-mono/cli {:local/root "../../bases/cli"}
+        denote-mono/config {:local/root "../../components/config"}
+        denote-mono/editor {:local/root "../../components/editor"}
+        denote-mono/file-type {:local/root "../../components/file_type"}
+        denote-mono/filename {:local/root "../../components/filename"}
+        denote-mono/filesystem {:local/root "../../components/filesystem"}
+        denote-mono/process {:local/root "../../components/process"}
+        denote-mono/search {:local/root "../../components/search"}
+        denote-mono/silo {:local/root "../../components/silo"}
+        denote-mono/slug {:local/root "../../components/slug"}
         org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases {:uberjar {:main denote-mono.cli.core
                      :major-version 0
