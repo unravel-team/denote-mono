@@ -3,7 +3,10 @@
  :aliases
  {:dev
   {:extra-deps
-   {;; Bases
+   {;; Components
+    denote-mono/slug {:local/root "components/slug"}
+
+    ;; Bases
     denote-mono/cli {:local/root "bases/cli"}}
    :extra-paths ["development/src"]}
 
@@ -11,9 +14,11 @@
   {:extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}}
-   :extra-paths ["bases/cli/test"
+   :extra-paths ["components/slug/test"
+                 "bases/cli/test"
                  "projects/denote-cli/test"]
    :main-opts ["-m" "cognitect.test-runner"
+               "-d" "components/slug/test"
                "-d" "bases/cli/test"
                "-d" "projects/denote-cli/test"]}
 
