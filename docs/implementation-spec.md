@@ -1040,12 +1040,20 @@ May intentionally differ:
 
 ## 18. First implementation checklist
 
-- [ ] Create workspace scaffold matching section 9.
-- [ ] Add `slug` component and tests.
-- [ ] Add `filename` component and golden fixtures.
-- [ ] Add `sequence` component and port tests.
-- [ ] Add `config` + `silo` components.
-- [ ] Add `filesystem` list walker.
-- [ ] Add `cli` base with `list`, `parse`, `format`, `seq validate` commands.
-- [ ] Add rename plan data model before applying mutations.
+- [x] Create workspace scaffold matching section 9.
+- [x] Add `slug` component and tests.
+- [x] Add `filename` component and golden fixtures.
+- [x] Add `sequence` component and port tests.
+- [x] Add `config` + `silo` components.
+- [x] Add `filesystem` list walker.
+- [x] Add `cli` base with `list`, `find`, `open`, `seq` commands.
+- [x] Add rename plan data model before applying mutations.
+
+Implementation status (phases of section 15): 0 through 5 are done, plus the
+new-note workflow of section 8.1 (a `note` component). Phase 6 distribution
+polish (native image, completions, packaging) remains. Known v1 deltas from
+this spec: `fzf` interactive selection is not yet wired into `find`/`open`
+(non-interactive output works), `rename --break-links` guard and
+`rename-many --from-stdin` are not implemented, and `seq tree`/`seq open
+next-sibling` views are pending.
 
