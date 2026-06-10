@@ -4,6 +4,7 @@
  {:dev
   {:extra-deps
    {;; Components
+    denote-mono/file-type {:local/root "components/file_type"}
     denote-mono/filename {:local/root "components/filename"}
     denote-mono/slug {:local/root "components/slug"}
 
@@ -15,11 +16,13 @@
   {:extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}}
-   :extra-paths ["components/filename/test"
+   :extra-paths ["components/file_type/test"
+                 "components/filename/test"
                  "components/slug/test"
                  "bases/cli/test"
                  "projects/denote-cli/test"]
    :main-opts ["-m" "cognitect.test-runner"
+               "-d" "components/file_type/test"
                "-d" "components/filename/test"
                "-d" "components/slug/test"
                "-d" "bases/cli/test"

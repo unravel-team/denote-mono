@@ -2,6 +2,8 @@
   "Pure Denote filename parser, formatter, and validator."
   (:require [denote-mono.filename.core :as core]))
 
+(def encryption-extensions core/encryption-extensions)
+
 (defn date-identifier? [s] (core/date-identifier? s))
 
 (defn parse ([path] (parse path {})) ([path opts] (core/parse path opts)))
