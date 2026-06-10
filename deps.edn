@@ -9,6 +9,7 @@
     denote-mono/file-type {:local/root "components/file_type"}
     denote-mono/filename {:local/root "components/filename"}
     denote-mono/filesystem {:local/root "components/filesystem"}
+    denote-mono/front-matter {:local/root "components/front_matter"}
     denote-mono/process {:local/root "components/process"}
     denote-mono/search {:local/root "components/search"}
     denote-mono/silo {:local/root "components/silo"}
@@ -27,6 +28,7 @@
                  "components/file_type/test"
                  "components/filename/test"
                  "components/filesystem/test"
+                 "components/front_matter/test"
                  "components/process/test"
                  "components/search/test"
                  "components/silo/test"
@@ -39,6 +41,7 @@
                "-d" "components/file_type/test"
                "-d" "components/filename/test"
                "-d" "components/filesystem/test"
+               "-d" "components/front_matter/test"
                "-d" "components/process/test"
                "-d" "components/search/test"
                "-d" "components/silo/test"
