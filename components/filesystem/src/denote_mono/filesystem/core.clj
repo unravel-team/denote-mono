@@ -52,6 +52,11 @@
    {:keys [follow-symlinks? skip-backups? excluded-directories-regex],
     :or {follow-symlinks? true, skip-backups? true}}]
   (let [root-canonical (canonical root)
+        root-path (to-path root-canonical)
+        ;; Only symlinked entries can escape the canonical root, so
+        ;; containment is checked on their real paths alone.
+        ;; [ref:silo_path_containment]
+        contained? (fn [real] (.startsWith (to-path real) root-path))
         excluded-dir-pattern (some-> excluded-directories-regex
                                      re-pattern)
         result (transient [])
@@ -61,26 +66,25 @@
          (doseq [^File entry (sort-by #(.getName ^File %)
                                       (or (.listFiles dir) []))]
            (let [path (.getPath entry)
-                 entry-path (to-path path)
-                 symlink? (Files/isSymbolicLink entry-path)]
+                 symlink? (Files/isSymbolicLink (to-path path))
+                 follow-entry? (or follow-symlinks? (not symlink?))]
              (cond (hidden-name? entry) nil
-                   (Files/isDirectory entry-path
-                                      (if follow-symlinks? follow no-follow))
-                     (when (and (or follow-symlinks? (not symlink?))
+                   (.isDirectory entry)
+                     (when (and follow-entry?
                                 (not (and excluded-dir-pattern
-                                          (re-find excluded-dir-pattern path)))
-                                (inside-root? root-canonical path))
-                       ;; Track real paths to break symlink cycles.
+                                          (re-find excluded-dir-pattern path))))
+                       ;; One canonicalization per directory covers both
+                       ;; the containment check and symlink-cycle tracking.
                        (let [real (canonical path)]
-                         (when-not (@seen-dirs real)
+                         (when (and (contained? real) (not (@seen-dirs real)))
                            (vswap! seen-dirs conj real)
                            (walk entry))))
-                   (Files/isRegularFile entry-path
-                                        (if follow-symlinks? follow no-follow))
-                     (when (and (or follow-symlinks? (not symlink?))
+                   (.isFile entry)
+                     (when (and follow-entry?
                                 (.canRead entry)
                                 (not (and skip-backups? (backup-file? path)))
-                                (inside-root? root-canonical path))
+                                (or (not symlink?)
+                                    (contained? (canonical path))))
                        (conj! result path))))))]
       (walk (File. ^String root-canonical)))
     (persistent! result)))

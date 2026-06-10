@@ -56,28 +56,23 @@ Commands:
 
 (def ^:private find-options [[nil "--open" "Open the selection in the editor"]])
 
+(defn- load-validated-config
+  [global-opts env]
+  (-> (config/load-config {:path (:config global-opts), :env env})
+      config/validate))
+
 (defn- make-context
   [global-opts {:keys [env cwd]}]
-  (let [cfg (-> (config/load-config {:path (:config global-opts), :env env})
-                config/validate)]
+  (let [cfg (load-validated-config global-opts env)]
     {:config cfg,
      :silo
      (silo/resolve-silo cfg (select-keys global-opts [:silo :root]) cwd env),
      :env env,
      :cwd cwd}))
 
-(defn- note->json-friendly
-  [note]
-  (-> note
-      (update :mtime str)
-      (update :silo
-              #(some-> %
-                       name))))
-
 (defn- render-notes
   [notes {:keys [json edn print0]}]
-  (cond json (str/join "\n"
-                       (map #(json/write-str (note->json-friendly %)) notes))
+  (cond json (str/join "\n" (map #(json/write-str (search/note->wire %)) notes))
         edn (str/join "\n" (map pr-str notes))
         print0 (str/join "\u0000" (map :relative-path notes))
         :else (str/join "\n" (map :relative-path notes))))
@@ -93,16 +88,22 @@ Commands:
                       (search/sort-notes (keyword (:sort options)) {}))]
         {:exit (exit-codes :success), :out (render-notes notes options)}))))
 
-(defn- query-matches
-  [context query]
-  (let [notes
-          (search/sort-notes (search/list-notes context {} {}) :identifier {})
-        query (some-> query
-                      str/lower-case)]
-    (if (str/blank? query)
-      notes
-      (filterv #(str/includes? (str/lower-case (:relative-path %)) query)
-        notes))))
+(defn- find-notes
+  "Shared body for find/open: query, then print or launch the editor."
+  [context query open?]
+  (let [notes (search/sort-notes (search/list-notes context {:query query} {})
+                                 :identifier
+                                 {})]
+    (cond (empty? notes) {:exit (exit-codes :no-match),
+                          :out "No matching notes"}
+          open? (let [{:keys [exit]} (editor/open (map :path notes)
+                                                  (assoc context
+                                                    :inherit-io? true))]
+                  {:exit
+                   (if (zero? exit) (exit-codes :success) (exit-codes :tool)),
+                   :out ""})
+          :else {:exit (exit-codes :success),
+                 :out (str/join "\n" (map :relative-path notes))})))
 
 (defn- handle-find
   [context args]
@@ -110,28 +111,13 @@ Commands:
                                                                  find-options)]
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (let [notes (query-matches context (first arguments))]
-        (cond (empty? notes) {:exit (exit-codes :no-match),
-                              :out "No matching notes"}
-              (:open options)
-                (let [{:keys [exit]} (editor/open (map :path notes)
-                                                  (assoc context
-                                                    :inherit-io? true))]
-                  {:exit
-                   (if (zero? exit) (exit-codes :success) (exit-codes :tool)),
-                   :out ""})
-              :else {:exit (exit-codes :success),
-                     :out (str/join "\n" (map :relative-path notes))})))))
+      (find-notes context (first arguments) (:open options)))))
 
-(defn- handle-open
-  [context args]
-  (handle-find context (conj (vec args) "--open")))
+(defn- handle-open [context args] (find-notes context (first args) true))
 
 (defn- handle-silo
-  [global-opts harness args]
-  (let [{:keys [env]} harness
-        cfg (-> (config/load-config {:path (:config global-opts), :env env})
-                config/validate)
+  [global-opts {:keys [env]} args]
+  (let [cfg (load-validated-config global-opts env)
         silos (silo/all-silos cfg env)
         [subcommand silo-name] args]
     (case subcommand
@@ -140,23 +126,26 @@ Commands:
                              (map (fn [[silo-key {:keys [path]}]]
                                     (str (name silo-key) "\t" path))
                                (sort-by key silos)))}
-      "path" (let [target (if silo-name
-                            (get silos (keyword silo-name))
-                            (get silos (:default-silo cfg)))]
-               (if target
-                 {:exit (exit-codes :success), :out (:path target)}
-                 {:exit (exit-codes :validation),
-                  :out (str "Unknown silo. Configured: "
-                            (str/join ", " (map name (keys silos))))}))
-      "doctor" (let [problems (for [[silo-key {:keys [path]}] silos
-                                    :when (not (.isDirectory (java.io.File.
-                                                               ^String path)))]
-                                (str (name silo-key) ": missing " path))]
+      "path" (let [target (or (some-> silo-name
+                                      keyword)
+                              (:default-silo cfg))]
+               (if-let [path (silo/path-for cfg target env)]
+                 {:exit (exit-codes :success), :out path}
+                 (throw (ex-info (str "Unknown silo: "
+                                      (some-> target
+                                              name))
+                                 {:type :validation, :silos (keys silos)}))))
+      "doctor" (let [report (silo/doctor cfg env)
+                     problems (remove :ok? report)]
                  (if (seq problems)
                    {:exit (exit-codes :validation),
-                    :out (str/join "\n" problems)}
+                    :out (str/join "\n"
+                                   (map #(str (name (:name %))
+                                              ": " (:reason %)
+                                              " " (:path %))
+                                     problems))}
                    {:exit (exit-codes :success),
-                    :out (str (count silos) " silo(s) OK")}))
+                    :out (str (count report) " silo(s) OK")}))
       {:exit (exit-codes :usage),
        :out "Usage: denote silo list|path [NAME]|doctor"})))
 

@@ -23,6 +23,15 @@
   [path silo]
   (fs/inside-root? (:path silo) path))
 
+(defn doctor
+  "Health-check every configured silo. Returns a seq of
+  {:name NAME :path PATH :ok? BOOL :reason STRING-OR-NIL}."
+  [cfg env]
+  (for [[silo-name {:keys [path]}] (sort-by key (all-silos cfg env))]
+    (if (fs/directory? path)
+      {:name silo-name, :path path, :ok? true, :reason nil}
+      {:name silo-name, :path path, :ok? false, :reason "missing directory"})))
+
 (defn- silo-name-key
   [silo-name]
   (if (string? silo-name) (keyword silo-name) silo-name))

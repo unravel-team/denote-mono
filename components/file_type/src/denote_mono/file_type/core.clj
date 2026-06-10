@@ -57,36 +57,41 @@
      :link-retrieval-format "[denote:%s]",
      :link-in-context-regexp #"\[\[denote:([^\]\[]*?)(?:::.*)?\]\[(.*?)\]\]"}]])
 
-(defn properties
-  [type]
-  (some (fn [[t props]] (when (= t type) props)) registry))
+(def ^:private type->properties (into {} registry))
+
+(defn properties [type] (type->properties type))
 
 (defn extension-for [type] (:extension (properties type)))
 
-(defn extensions
-  []
+;; Lookup tables derived once from the static registry.
+(def ^:private all-extensions
   (vec (distinct (map (fn [[_ props]] (:extension props)) registry))))
 
-(defn extensions-with-encryption
-  []
-  (let [base (extensions)]
-    (into base
-          (for [ext base enc filename/encryption-extensions] (str ext enc)))))
+(def ^:private all-extensions-with-encryption
+  (into all-extensions
+        (for [ext all-extensions
+              enc filename/encryption-extensions]
+          (str ext enc))))
+
+(def ^:private supported-extension-set (set all-extensions-with-encryption))
+
+(def ^:private extension->types
+  (group-by (fn [[_ props]] (:extension props)) registry))
+
+(defn extensions [] all-extensions)
+
+(defn extensions-with-encryption [] all-extensions-with-encryption)
 
 (defn supported-extension?
   [path]
-  (let [ext (filename/extension path)]
-    (boolean (and (not (str/blank? ext))
-                  (some #{ext} (extensions-with-encryption))))))
+  (contains? supported-extension-set (filename/extension path)))
 
 (defn text-file?
   "True when PATH has a supported text extension, possibly encrypted."
   [path]
   (supported-extension? path))
 
-(defn- types-with-extension
-  [ext]
-  (filterv (fn [[_ props]] (= ext (:extension props))) registry))
+(defn- types-with-extension [ext] (extension->types ext))
 
 (defn detect
   "Detect the file type of PATH, optionally using a CONTENT sample to

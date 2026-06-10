@@ -28,12 +28,10 @@
   "Resolve the editor argv: $VISUAL, then $EDITOR, then config
   [:tools :editor] (a vector), then \"vi\"."
   [env config]
-  (or (some-> (get env "VISUAL")
-              not-empty
-              shellwords)
-      (some-> (get env "EDITOR")
-              not-empty
-              shellwords)
+  (or (some #(some-> (get env %)
+                     not-empty
+                     shellwords)
+            ["VISUAL" "EDITOR"])
       (not-empty (get-in config [:tools :editor]))
       ["vi"]))
 

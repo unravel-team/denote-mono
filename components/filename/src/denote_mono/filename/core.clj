@@ -7,6 +7,8 @@
 
 (def date-identifier-regexp #"[0-9]{8}T[0-9]{6}")
 
+(def ^:private leading-date-identifier-regexp #"\A[0-9]{8}T[0-9]{6}")
+
 (def identifier-regexp #"@@([^.]+?)(==.*|--.*|__.*|@@.*|\..*)*$")
 
 (def signature-regexp #"==([^.]+?)(==.*|--.*|__.*|@@.*|\..*)*$")
@@ -65,7 +67,7 @@
 (defn retrieve-identifier
   [path]
   (let [base (basename path)]
-    (or (re-find (re-pattern (str "\\A" date-identifier-regexp)) base)
+    (or (re-find leading-date-identifier-regexp base)
         (first-group identifier-regexp base))))
 
 (defn retrieve-signature [path] (first-group signature-regexp (basename path)))
@@ -86,27 +88,33 @@
   [marker value]
   (re-pattern (str "(" marker (Pattern/quote value) ").*$")))
 
+(defn- valid-name-with-components?
+  "Validity check on BASE given already-extracted component values: strip
+  each component and accept when only an optional extension remains."
+  [base {:keys [title keywords signature identifier]}]
+  (let [identifier-marker (if (str/includes? base "@@") "@@" "")
+        remainder (reduce (fn [s [marker value]]
+                            (if value
+                              (strip-first-group
+                                s
+                                (strip-component-pattern marker value))
+                              s))
+                    base
+                    [["--" title] ["__" keywords] ["==" signature]
+                     [identifier-marker identifier]])]
+    (and (not (str/starts-with? base "."))
+         (or (str/blank? remainder) (str/starts-with? remainder ".")))))
+
 (defn valid-denote-filename?
   "True when PATH respects the Denote file-naming scheme: removing all
   recognized components leaves nothing but an optional extension."
   [path]
-  (let [base (basename path)
-        title (retrieve-title base)
-        keywords (retrieve-keywords base)
-        signature (retrieve-signature base)
-        identifier (retrieve-identifier base)
-        remainder
-          (cond-> base
-            title (strip-first-group (strip-component-pattern "--" title))
-            keywords (strip-first-group (strip-component-pattern "__" keywords))
-            signature (strip-first-group (strip-component-pattern "=="
-                                                                  signature))
-            identifier (strip-first-group
-                         (strip-component-pattern
-                           (if (str/includes? base "@@") "@@" "")
-                           identifier)))]
-    (and (not (str/starts-with? base "."))
-         (or (str/blank? remainder) (str/starts-with? remainder ".")))))
+  (let [base (basename path)]
+    (valid-name-with-components? base
+                                 {:title (retrieve-title base),
+                                  :keywords (retrieve-keywords base),
+                                  :signature (retrieve-signature base),
+                                  :identifier (retrieve-identifier base)})))
 
 (defn keywords-combine [keywords] (str/join "_" keywords))
 
@@ -168,21 +176,21 @@
       (str directory file-name))))
 
 (defn- component-positions
-  "Vector of present components ordered by their marker position in BASE."
-  [base identifier signature title keywords]
-  (let [position (fn [pattern]
-                   (let [m (re-matcher pattern base)]
-                     (when (.find m) (.start m))))
-        leading-date?
-          (and identifier
-               (re-find (re-pattern (str "\\A" date-identifier-regexp)) base))
+  "Vector of present components ordered by their marker position in BASE.
+  Positions come from the already-extracted component values: each marker
+  plus its value is an exact substring of BASE."
+  [base {:keys [identifier signature title keywords]}]
+  (let [identifier-position (when identifier
+                              (if (re-find leading-date-identifier-regexp base)
+                                0
+                                (str/index-of base (str "@@" identifier))))
         entries (cond-> []
-                  identifier
-                    (conj [:identifier
-                           (if leading-date? 0 (position identifier-regexp))])
-                  signature (conj [:signature (position signature-regexp)])
-                  title (conj [:title (position title-regexp)])
-                  keywords (conj [:keywords (position keywords-regexp)]))]
+                  identifier (conj [:identifier identifier-position])
+                  signature (conj [:signature
+                                   (str/index-of base (str "==" signature))])
+                  title (conj [:title (str/index-of base (str "--" title))])
+                  keywords (conj [:keywords
+                                  (str/index-of base (str "__" keywords))]))]
     (->> entries
          (filter (comp some? second))
          (sort-by second)
@@ -199,7 +207,11 @@
         identifier (retrieve-identifier base)
         signature (retrieve-signature base)
         title (retrieve-title base)
-        keywords-string (retrieve-keywords base)]
+        keywords-string (retrieve-keywords base)
+        components {:identifier identifier,
+                    :signature signature,
+                    :title title,
+                    :keywords keywords-string}]
     {:path path,
      :directory directory,
      :basename base,
@@ -212,6 +224,5 @@
      :signature signature,
      :title title,
      :keywords (when keywords-string (vec (str/split keywords-string #"_"))),
-     :components-order
-     (component-positions base identifier signature title keywords-string),
-     :valid-denote-name? (valid-denote-filename? base)}))
+     :components-order (component-positions base components),
+     :valid-denote-name? (valid-name-with-components? base components)}))

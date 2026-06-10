@@ -1,6 +1,7 @@
 (ns denote-mono.search.core
   "List, filter, and sort Denote notes inside a resolved silo."
-  (:require [denote-mono.file-type.interface :as file-type]
+  (:require [clojure.string :as str]
+            [denote-mono.file-type.interface :as file-type]
             [denote-mono.filename.interface :as filename]
             [denote-mono.filesystem.interface :as fs]))
 
@@ -15,26 +16,47 @@
        :file-type (file-type/detect path nil (:filename config)),
        :mtime (fs/file-mtime path)})))
 
+(defn- compile-filters
+  "Compile regex filter strings once so per-note matching reuses Patterns,
+  and lowercase the free-text query."
+  [{:keys [match title query], :as filters}]
+  (cond-> filters
+    match (assoc :match (re-pattern match))
+    title (assoc :title (re-pattern title))
+    query (assoc :query (str/lower-case query))))
+
 (defn- matches-filters?
-  [{:keys [filename]} {:keys [match keyword signature title id]}]
-  (and (or (nil? match) (re-find (re-pattern match) (:basename filename)))
+  [{:keys [filename relative-path]}
+   {:keys [match keyword signature title id query]}]
+  (and (or (nil? match) (re-find match (:basename filename)))
        (or (nil? keyword) (some #{keyword} (:keywords filename)))
        (or (nil? signature) (= signature (:signature filename)))
        (or (nil? title)
-           (and (:title filename)
-                (re-find (re-pattern title) (:title filename))))
-       (or (nil? id) (= id (:identifier filename)))))
+           (and (:title filename) (re-find title (:title filename))))
+       (or (nil? id) (= id (:identifier filename)))
+       (or (nil? query) (str/includes? (str/lower-case relative-path) query))))
 
 (defn list-notes
   "Return note records for all valid Denote files in the context's silo,
-  filtered by FILTERS (:match :keyword :signature :title :id)."
+  filtered by FILTERS (:match :keyword :signature :title :id :query)."
   [{:keys [silo config]} filters _opts]
   (let [root (fs/canonical (:path silo))
-        files (fs/list-files [root] (get config :files {}))]
+        files (fs/list-files [root] (get config :files {}))
+        filters (compile-filters filters)]
     (into []
-          (keep #(when-let [note (note-record % root (:name silo) config)]
-                   (when (matches-filters? note filters) note)))
+          (comp (keep #(note-record % root (:name silo) config))
+                (filter #(matches-filters? % filters)))
           files)))
+
+(defn note->wire
+  "Shape a note record for JSON/EDN output: stringify the mtime instant and
+  the silo keyword."
+  [note]
+  (-> note
+      (update :mtime str)
+      (update :silo
+              #(some-> %
+                       name))))
 
 (defn- nils-last [value] [(if (nil? value) 1 0) value])
 

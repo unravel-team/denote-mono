@@ -45,7 +45,10 @@
     (is (= ["gamma"] (titles (search/list-notes (context) {:title "gam"} {})))))
   (testing ":match regex on basename"
     (is (= ["gamma"]
-           (titles (search/list-notes (context) {:match "\\.md$"} {}))))))
+           (titles (search/list-notes (context) {:match "\\.md$"} {})))))
+  (testing ":query free-text filter is case-insensitive on relative path"
+    (is (= ["alpha"]
+           (titles (search/list-notes (context) {:query "ALPHA"} {}))))))
 
 (deftest sort-notes-test
   (let [notes (search/list-notes (context) {} {})]

@@ -11,3 +11,5 @@
 (defn resolve-silo
   [config cli-opts cwd env]
   (core/resolve-silo config cli-opts cwd env))
+
+(defn doctor [config env] (core/doctor config env))
