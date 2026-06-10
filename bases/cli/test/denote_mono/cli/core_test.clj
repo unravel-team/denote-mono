@@ -84,6 +84,53 @@
   (testing "open runs the editor (EDITOR=true) and succeeds"
     (is (zero? (:exit (run-cli "open" "alpha"))))))
 
+(deftest rename-command
+  (testing "dry-run prints the plan and leaves the file alone"
+    (let [{:keys [exit out]}
+            (run-cli "rename"
+                     (str *notes-root* "/20240101T000000--alpha__clojure.org")
+                     "--title"
+                     "renamed"
+                     "--dry-run")]
+      (is (zero? exit))
+      (is (str/includes? out "20240101T000000--renamed__clojure.org"))
+      (is (.exists (java.io.File. (str
+                                    *notes-root*
+                                    "/20240101T000000--alpha__clojure.org"))))))
+  (testing "rename applies and reports old -> new"
+    (let [{:keys [exit]} (run-cli "rename"
+                                    (str *notes-root*
+                                         "/20240101T000000--alpha__clojure.org")
+                                  "--title" "renamed"
+                                  "--front-matter" "none")]
+      (is (zero? exit))
+      (is (.exists (java.io.File.
+                     (str *notes-root*
+                          "/20240101T000000--renamed__clojure.org"))))))
+  (testing "file outside silo exits with validation code"
+    (is (= 3 (:exit (run-cli "rename" "/etc/hosts" "--title" "x"))))))
+
+(deftest rename-many-command
+  (testing "without --yes prints plan and asks for confirmation"
+    (let [{:keys [exit out]}
+            (run-cli "rename-many" "--add-keyword"
+                     "extra" (str *notes-root*
+                                  "/20240101T000000--alpha__clojure.org"))]
+      (is (= 3 exit))
+      (is (str/includes? out "--yes"))))
+  (testing "with --yes applies the batch"
+    (let [{:keys [exit out]}
+            (run-cli "rename-many"
+                     "--add-keyword" "extra"
+                     "--front-matter" "none"
+                     "--yes" (str *notes-root*
+                                  "/20240101T000000--alpha__clojure.org"))]
+      (is (zero? exit))
+      (is (str/includes? out "Renamed 1"))
+      (is (.exists (java.io.File.
+                     (str *notes-root*
+                          "/20240101T000000--alpha__clojure_extra.org")))))))
+
 (deftest silo-commands
   (testing "silo list shows names and paths"
     (let [{:keys [exit out]} (run-cli "silo" "list")]

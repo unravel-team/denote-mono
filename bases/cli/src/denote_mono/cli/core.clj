@@ -7,6 +7,7 @@
             [clojure.tools.cli :as tools-cli]
             [denote-mono.config.interface :as config]
             [denote-mono.editor.interface :as editor]
+            [denote-mono.rename.interface :as rename]
             [denote-mono.search.interface :as search]
             [denote-mono.silo.interface :as silo])
   (:gen-class))
@@ -35,6 +36,11 @@ Commands:
                    --title --id; output: --sort --json --edn --print0)
   find [QUERY]     Filter notes by query; prints paths (--open opens them)
   open [QUERY]     Open matching note in $EDITOR
+  rename FILE      Rename one note (--title --keyword --signature --id
+                   --date --front-matter MODE --dry-run --yes)
+  rename-many F... Batch rename (--add-keyword --remove-keyword
+                   --replace-keywords KW,KW --from-front-matter
+                   --dry-run --yes)
   silo list        List configured silos
   silo path [NAME] Print the path of a silo
   silo doctor      Check that configured silos exist
@@ -55,6 +61,24 @@ Commands:
    [nil "--print0" "NUL-delimited output"]])
 
 (def ^:private find-options [[nil "--open" "Open the selection in the editor"]])
+
+(def ^:private rename-options
+  [[nil "--title TITLE" "New title; empty string removes"]
+   [nil "--keyword KW" "Keyword (repeatable); a single empty removes all"
+    :assoc-fn (fn [m k v] (update m k (fnil conj []) v))]
+   [nil "--signature SIG" "New signature; empty string removes"]
+   [nil "--id ID" "New identifier"]
+   [nil "--date DATE" "Date for generated identifier and front matter"]
+   [nil "--front-matter MODE" "sync, update-existing, add, or none" :parse-fn
+    keyword] [nil "--dry-run" "Print the plan without applying it"]
+   [nil "--yes" "Apply without confirmation"]])
+
+(def ^:private rename-many-options
+  (conj rename-options
+        [nil "--add-keyword KW" "Add a keyword to every file"]
+        [nil "--remove-keyword KW" "Remove a keyword from every file"]
+        [nil "--replace-keywords KWS" "Replace keywords (comma-separated)"]
+        [nil "--from-front-matter" "Take components from front matter"]))
 
 (defn- load-validated-config
   [global-opts env]
@@ -115,6 +139,97 @@ Commands:
 
 (defn- handle-open [context args] (find-notes context (first args) true))
 
+(defn- options->changes
+  "Build the rename changes map from provided CLI options only: omitted
+  options keep current components, explicit empty strings remove them."
+  [options]
+  (cond-> {}
+    (contains? options :title) (assoc :title (:title options))
+    (contains? options :keyword)
+      (assoc :keywords (let [kws (:keyword options)] (if (= [""] kws) [] kws)))
+    (contains? options :signature) (assoc :signature (:signature options))
+    (contains? options :id) (assoc :identifier (:id options))
+    (contains? options :date) (assoc :date (:date options))))
+
+(defn- render-plan
+  [{:keys [source destination content-change]}]
+  (str source
+       " -> "
+       destination
+       (when-let [actions (seq (:actions content-change))]
+         (str "\n"
+              (str/join "\n"
+                        (for [{:keys [action component old-line new-line]}
+                                actions]
+                          (str "  " (name action)
+                               " " (name component)
+                               ": " (or new-line old-line))))))
+       (when (:prepend content-change) "\n  prepend front matter")))
+
+(defn- handle-rename
+  [context args]
+  (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
+                                                                 rename-options)
+        file (first arguments)]
+    (cond
+      errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (nil? file) {:exit (exit-codes :usage),
+                   :out "Usage: denote rename FILE [OPTIONS]"}
+      :else
+        (let [plan (rename/plan-rename file
+                                       (options->changes options)
+                                       context
+                                       {:front-matter (:front-matter options)})]
+          (if (:dry-run options)
+            {:exit (exit-codes :success), :out (render-plan plan)}
+            (let [applied (rename/apply-plan (rename/validate-plan plan {}) {})]
+              {:exit (exit-codes :success),
+               :out (str (:source applied) " -> " (:destination applied))}))))))
+
+(defn- batch-changes-from-options
+  [options]
+  (cond (:add-keyword options) {:add-keyword (:add-keyword options)}
+        (:remove-keyword options) {:remove-keyword (:remove-keyword options)}
+        (:replace-keywords options)
+          {:replace-keywords (str/split (:replace-keywords options) #",")}
+        (:from-front-matter options) {:from-front-matter true}
+        :else (options->changes options)))
+
+(defn- handle-rename-many
+  [context args]
+  (let [{:keys [options arguments errors]}
+          (tools-cli/parse-opts args rename-many-options)]
+    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+          (empty? arguments) {:exit (exit-codes :usage),
+                              :out
+                              "Usage: denote rename-many FILE... [OPTIONS]"}
+          :else
+            (let [{:keys [plans errors]}
+                    (rename/plan-batch arguments
+                                       (batch-changes-from-options options)
+                                       context
+                                       {:front-matter (:front-matter options)})
+                  table (str/join "\n" (map render-plan plans))]
+              (cond (seq errors) {:exit (exit-codes :collision),
+                                  :out (str/join "\n" (map :message errors))}
+                    (:dry-run options) {:exit (exit-codes :success), :out table}
+                    (not (:yes options))
+                      {:exit (exit-codes :validation),
+                       :out (str table
+                                 "\nRe-run with --yes to apply, or --dry-run "
+                                 "to preview.")}
+                    :else (let [{:keys [applied failed pending]}
+                                  (rename/apply-batch plans {})]
+                            (if failed
+                              {:exit (exit-codes :failure),
+                               :out (str "Applied " (count applied)
+                                         ", failed: " (:error failed)
+                                         ", pending " (count pending))}
+                              {:exit (exit-codes :success),
+                               :out (str "Renamed "
+                                         (count applied)
+                                         " file(s)")})))))))
+
 (defn- handle-silo
   [global-opts {:keys [env]} args]
   (let [cfg (load-validated-config global-opts env)
@@ -169,6 +284,11 @@ Commands:
                                                 command-args)
                 (= command "open") (handle-open (make-context options harness)
                                                 command-args)
+                (= command "rename")
+                  (handle-rename (make-context options harness) command-args)
+                (= command "rename-many") (handle-rename-many
+                                            (make-context options harness)
+                                            command-args)
                 :else {:exit (exit-codes :usage),
                        :out (str "Unknown command: " command "\n\n" help-text)})
           (catch clojure.lang.ExceptionInfo e

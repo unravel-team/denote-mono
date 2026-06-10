@@ -4,6 +4,7 @@
         denote-mono/filename {:local/root "../../components/filename"}
         denote-mono/filesystem {:local/root "../../components/filesystem"}
         denote-mono/process {:local/root "../../components/process"}
+        denote-mono/rename {:local/root "../../components/rename"}
         denote-mono/search {:local/root "../../components/search"}
         denote-mono/silo {:local/root "../../components/silo"}
         org.clojure/data.json {:mvn/version "2.5.0"}
