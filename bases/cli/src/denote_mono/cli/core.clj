@@ -7,6 +7,7 @@
             [clojure.tools.cli :as tools-cli]
             [denote-mono.config.interface :as config]
             [denote-mono.editor.interface :as editor]
+            [denote-mono.filename.interface :as filename]
             [denote-mono.note.interface :as note]
             [denote-mono.rename.interface :as rename]
             [denote-mono.search.interface :as search]
@@ -38,6 +39,9 @@ Commands:
                    --title --id; output: --sort --json --edn --print0)
   find [QUERY]     Filter notes by query; prints paths (--open opens them)
   open [QUERY]     Open matching note in $EDITOR
+  grep QUERY       Search note contents (rg-accelerated when available)
+  backlinks ID|F   Notes linking to the given note
+  links FILE_OR_ID Outgoing denote: links of a note
   rename FILE      Rename one note (--title --keyword --signature --id
                    --date --front-matter MODE --dry-run --yes)
   rename-many F... Batch rename (--add-keyword --remove-keyword
@@ -160,6 +164,56 @@ Commands:
       (find-notes context (first arguments) (:open options)))))
 
 (defn- handle-open [context args] (find-notes context (first args) true))
+
+(defn- resolve-note-path
+  "Resolve FILE-OR-ID to a note path: an identifier looks the note up in
+  the silo, anything else is treated as a path."
+  [context file-or-id]
+  (if (filename/date-identifier? file-or-id)
+    (or (:path (first (search/list-notes context {:id file-or-id} {})))
+        (throw (ex-info (str "No note with identifier " file-or-id)
+                        {:type :no-match})))
+    file-or-id))
+
+(defn- handle-grep
+  [context args]
+  (if-let [query (first args)]
+    (let [matches (search/grep context query {})]
+      (if (seq matches)
+        {:exit (exit-codes :success),
+         :out (str/join "\n"
+                        (map #(str (:relative-path %)
+                                   ":" (:line-number %)
+                                   ":" (:line %))
+                          matches))}
+        {:exit (exit-codes :no-match), :out "No matches"}))
+    {:exit (exit-codes :usage), :out "Usage: denote grep QUERY"}))
+
+(defn- handle-backlinks
+  [context args]
+  (if-let [file-or-id (first args)]
+    (let [id (if (filename/date-identifier? file-or-id)
+               file-or-id
+               (or (filename/extract file-or-id :identifier)
+                   (throw (ex-info (str file-or-id " has no identifier")
+                                   {:type :validation}))))
+          notes (search/backlinks context id {})]
+      (if (seq notes)
+        {:exit (exit-codes :success),
+         :out (str/join "\n" (map :relative-path notes))}
+        {:exit (exit-codes :no-match), :out "No backlinks"}))
+    {:exit (exit-codes :usage), :out "Usage: denote backlinks FILE_OR_ID"}))
+
+(defn- handle-links
+  [context args]
+  (if-let [file-or-id (first args)]
+    (let [path (resolve-note-path context file-or-id)
+          {:keys [notes identifiers]} (search/links context path {})]
+      (if (seq identifiers)
+        {:exit (exit-codes :success),
+         :out (str/join "\n" (map :relative-path notes))}
+        {:exit (exit-codes :no-match), :out "No links"}))
+    {:exit (exit-codes :usage), :out "Usage: denote links FILE_OR_ID"}))
 
 (defn- options->changes
   "Build the rename changes map from provided CLI options only: omitted
@@ -483,33 +537,39 @@ Commands:
    (let [{:keys [options arguments errors]}
            (tools-cli/parse-opts args global-options :in-order true)
          [command & command-args] arguments]
-     (try (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-                (or (nil? command) (:help options) (= "help" command))
-                  {:exit (exit-codes :success), :out help-text}
-                (= command "silo") (handle-silo options harness command-args)
-                (= command "list") (handle-list (make-context options harness)
-                                                command-args)
-                (= command "find") (handle-find (make-context options harness)
-                                                command-args)
-                (= command "open") (handle-open (make-context options harness)
-                                                command-args)
-                (= command "rename")
-                  (handle-rename (make-context options harness) command-args)
-                (= command "rename-many") (handle-rename-many
-                                            (make-context options harness)
-                                            command-args)
-                (= command "new") (handle-new (make-context options harness)
-                                              command-args)
-                (= command "seq") (handle-seq (make-context options harness)
-                                              command-args)
-                :else {:exit (exit-codes :usage),
-                       :out (str "Unknown command: " command "\n\n" help-text)})
-          (catch clojure.lang.ExceptionInfo e
-            {:exit (exit-codes (or (:type (ex-data e)) :failure)),
-             :out (str (ex-message e)
-                       (when-let [silos (seq (:silos (ex-data e)))]
-                         (str "\nConfigured silos: "
-                              (str/join ", " (map name silos)))))})))))
+     (try
+       (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+             (or (nil? command) (:help options) (= "help" command))
+               {:exit (exit-codes :success), :out help-text}
+             (= command "silo") (handle-silo options harness command-args)
+             (= command "list") (handle-list (make-context options harness)
+                                             command-args)
+             (= command "find") (handle-find (make-context options harness)
+                                             command-args)
+             (= command "open") (handle-open (make-context options harness)
+                                             command-args)
+             (= command "rename") (handle-rename (make-context options harness)
+                                                 command-args)
+             (= command "rename-many")
+               (handle-rename-many (make-context options harness) command-args)
+             (= command "new") (handle-new (make-context options harness)
+                                           command-args)
+             (= command "grep") (handle-grep (make-context options harness)
+                                             command-args)
+             (= command "backlinks")
+               (handle-backlinks (make-context options harness) command-args)
+             (= command "links") (handle-links (make-context options harness)
+                                               command-args)
+             (= command "seq") (handle-seq (make-context options harness)
+                                           command-args)
+             :else {:exit (exit-codes :usage),
+                    :out (str "Unknown command: " command "\n\n" help-text)})
+       (catch clojure.lang.ExceptionInfo e
+         {:exit (exit-codes (or (:type (ex-data e)) :failure)),
+          :out (str (ex-message e)
+                    (when-let [silos (seq (:silos (ex-data e)))]
+                      (str "\nConfigured silos: "
+                           (str/join ", " (map name silos)))))})))))
 
 (defn -main
   [& args]

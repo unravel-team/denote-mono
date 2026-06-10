@@ -3,7 +3,8 @@
   (:require [clojure.string :as str]
             [denote-mono.file-type.interface :as file-type]
             [denote-mono.filename.interface :as filename]
-            [denote-mono.filesystem.interface :as fs]))
+            [denote-mono.filesystem.interface :as fs]
+            [denote-mono.process.interface :as process]))
 
 (defn- note-record
   [path root-canonical silo-name config]
@@ -57,6 +58,73 @@
       (update :silo
               #(some-> %
                        name))))
+
+(defn- text-notes
+  [context]
+  (filterv #(file-type/text-file? (:path %)) (list-notes context {} {})))
+
+(defn- grep-with-clojure
+  [notes pattern]
+  (vec (for [{:keys [path relative-path]} notes
+             [line-number line]
+               (map-indexed vector (str/split-lines (fs/read-text path)))
+             :when (re-find pattern line)]
+         {:path path,
+          :relative-path relative-path,
+          :line-number (inc line-number),
+          :line line})))
+
+(defn- grep-with-rg
+  [notes query rg-argv]
+  (let [{:keys [exit out error]}
+          (process/run (into (vec rg-argv)
+                             (concat ["--line-number" "--no-heading" "--" query]
+                                     (map :path notes)))
+                       {})]
+    (when (and (not error) (#{0 1} exit))
+      (let [by-path (into {} (map (juxt :path identity)) notes)]
+        (vec (for [match-line (str/split-lines out)
+                   :when (not (str/blank? match-line))
+                   :let [[path line-number line] (str/split match-line #":" 3)
+                         note (by-path path)]
+                   :when note]
+               {:path path,
+                :relative-path (:relative-path note),
+                :line-number (parse-long line-number),
+                :line line}))))))
+
+(defn grep
+  "Search note contents for QUERY (a regex string). Uses rg when available,
+  with a pure Clojure fallback. Only supported text files are read."
+  [{:keys [config], :as context} query _opts]
+  (let [notes (text-notes context)
+        rg-argv (get-in config [:tools :rg] ["rg"])]
+    (or (when (and (seq notes) (process/available? (first rg-argv)))
+          (grep-with-rg notes query rg-argv))
+        (grep-with-clojure notes (re-pattern query)))))
+
+(def ^:private link-id-pattern #"denote:([0-9]{8}T[0-9]{6})")
+
+(defn links
+  "Identifiers linked from FILE's contents, resolved to note records when
+  the target exists in the silo."
+  [context file _opts]
+  (let [ids (distinct (map second (re-seq link-id-pattern (fs/read-text file))))
+        by-id (into {}
+                    (keep (fn [note]
+                            (when-let [id (get-in note [:filename :identifier])]
+                              [id note])))
+                    (list-notes context {} {}))]
+    {:identifiers (vec ids), :notes (vec (keep by-id ids))}))
+
+(defn backlinks
+  "Notes whose contents link to ID via denote link syntax, excluding the
+  note that carries ID itself."
+  [context id _opts]
+  (vec (for [{:keys [path], :as note} (text-notes context)
+             :when (not= id (get-in note [:filename :identifier]))
+             :when (str/includes? (fs/read-text path) (str "denote:" id))]
+         note)))
 
 (defn- nils-last [value] [(if (nil? value) 1 0) value])
 

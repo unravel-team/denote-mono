@@ -1,5 +1,6 @@
 (ns denote-mono.search.interface-test
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [denote-mono.search.interface :as search])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -49,6 +50,27 @@
   (testing ":query free-text filter is case-insensitive on relative path"
     (is (= ["alpha"]
            (titles (search/list-notes (context) {:query "ALPHA"} {}))))))
+
+(deftest grep-test
+  (spit (str (:path *silo*) "/20240101T000000--alpha__clojure.org")
+        "first line\nsecond with NEEDLE here\nthird\n")
+  (let [matches (search/grep (context) "NEEDLE" {})]
+    (is (= 1 (count matches)))
+    (is (= 2 (:line-number (first matches))))
+    (is (str/includes? (:line (first matches)) "NEEDLE"))))
+
+(deftest links-and-backlinks-test
+  (let [source (str (:path *silo*) "/20240101T000000--alpha__clojure.org")]
+    (spit source "See [[denote:20240102T000000][beta note]] for more.\n")
+    (testing "links resolves outgoing identifiers"
+      (let [{:keys [identifiers notes]} (search/links (context) source {})]
+        (is (= ["20240102T000000"] identifiers))
+        (is (= "beta" (get-in (first notes) [:filename :title])))))
+    (testing "backlinks finds the linking note"
+      (let [notes (search/backlinks (context) "20240102T000000" {})]
+        (is (= ["alpha"] (mapv #(get-in % [:filename :title]) notes)))))
+    (testing "no backlinks for an unlinked id"
+      (is (empty? (search/backlinks (context) "20240103T000000" {}))))))
 
 (deftest sort-notes-test
   (let [notes (search/list-notes (context) {} {})]

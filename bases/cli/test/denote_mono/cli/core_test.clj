@@ -131,6 +131,34 @@
                      (str *notes-root*
                           "/20240101T000000--alpha__clojure_extra.org")))))))
 
+(deftest grep-backlinks-links-commands
+  (spit (str *notes-root* "/20240101T000000--alpha__clojure.org")
+        "Linking to [[denote:20240102T000000][beta]] and a NEEDLE.\n")
+  (testing "grep finds content with file:line:text output"
+    (let [{:keys [exit out]} (run-cli "grep" "NEEDLE")]
+      (is (zero? exit))
+      (is (str/includes? out "alpha__clojure.org:1:"))))
+  (testing "grep without matches exits 6"
+    (is (= 6 (:exit (run-cli "grep" "zzz-not-there")))))
+  (testing "backlinks by identifier"
+    (let [{:keys [exit out]} (run-cli "backlinks" "20240102T000000")]
+      (is (zero? exit))
+      (is (str/includes? out "alpha"))))
+  (testing "backlinks by file path"
+    (let [{:keys [exit out]}
+            (run-cli "backlinks"
+                     (str *notes-root* "/20240102T000000--beta__notes.org"))]
+      (is (zero? exit))
+      (is (str/includes? out "alpha"))))
+  (testing "links lists outgoing targets"
+    (let [{:keys [exit out]}
+            (run-cli "links"
+                     (str *notes-root* "/20240101T000000--alpha__clojure.org"))]
+      (is (zero? exit))
+      (is (str/includes? out "beta"))))
+  (testing "links by identifier resolves the source note"
+    (is (zero? (:exit (run-cli "links" "20240101T000000"))))))
+
 (deftest new-command
   (testing "dry-run prints planned path"
     (let [{:keys [exit out]} (run-cli "new" "--title"
