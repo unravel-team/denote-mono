@@ -1,0 +1,2 @@
+{:paths ["src"]
+ :deps {denote-mono/slug {:local/root "../slug"}}}
