@@ -242,6 +242,18 @@ Commands:
                                ": " (or new-line old-line))))))
        (when (:prepend content-change) "\n  prepend front matter")))
 
+(defn- apply-batch-and-report
+  "Apply rename PLANS and shape the outcome as an exit/out pair."
+  [plans]
+  (let [{:keys [applied failed pending]} (rename/apply-batch plans {})]
+    (if failed
+      {:exit (exit-codes :failure),
+       :out (str "Applied " (count applied)
+                 ", failed: " (:error failed)
+                 ", pending " (count pending))}
+      {:exit (exit-codes :success),
+       :out (str "Renamed " (count applied) " file(s)")})))
+
 (defn- handle-rename
   [context args]
   (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
@@ -294,17 +306,7 @@ Commands:
                        :out (str table
                                  "\nRe-run with --yes to apply, or --dry-run "
                                  "to preview.")}
-                    :else (let [{:keys [applied failed pending]}
-                                  (rename/apply-batch plans {})]
-                            (if failed
-                              {:exit (exit-codes :failure),
-                               :out (str "Applied " (count applied)
-                                         ", failed: " (:error failed)
-                                         ", pending " (count pending))}
-                              {:exit (exit-codes :success),
-                               :out (str "Renamed "
-                                         (count applied)
-                                         " file(s)")})))))))
+                    :else (apply-batch-and-report plans))))))
 
 (defn- new-changes-from-options
   [options]
@@ -342,6 +344,16 @@ Commands:
   [context options]
   (or (:scheme options) (get-in context [:config :sequence :scheme]) :numeric))
 
+(defn- next-for-relation
+  "Resolve a seq RELATION (\"parent\", \"child\", \"sibling\") to the next
+  sequence, or nil for an unknown relation."
+  [sequences relation target scheme]
+  (case relation
+    "parent" (sequence/next-parent sequences scheme)
+    "child" (sequence/next-child sequences target scheme)
+    "sibling" (sequence/next-sibling sequences target scheme)
+    nil))
+
 (defn- apply-or-confirm
   "Shared --dry-run/--yes gate for seq mutations over rename PLANS."
   [plans options]
@@ -351,15 +363,7 @@ Commands:
                                 :out (str table
                                           "\nRe-run with --yes to apply.")}
           :else (do (doseq [plan plans] (rename/validate-plan plan {}))
-                    (let [{:keys [applied failed pending]}
-                            (rename/apply-batch plans {})]
-                      (if failed
-                        {:exit (exit-codes :failure),
-                         :out (str "Applied " (count applied)
-                                   ", failed: " (:error failed)
-                                   ", pending " (count pending))}
-                        {:exit (exit-codes :success),
-                         :out (str "Renamed " (count applied) " file(s)")}))))))
+                    (apply-batch-and-report plans)))))
 
 (def ^:private seq-options
   (conj new-options
@@ -390,12 +394,7 @@ Commands:
         "next"
           (let [[relation target] rest-args
                 {:keys [sequences]} (silo-sequences context)
-                result (case relation
-                         "parent" (sequence/next-parent sequences scheme)
-                         "child" (sequence/next-child sequences target scheme)
-                         "sibling"
-                           (sequence/next-sibling sequences target scheme)
-                         nil)]
+                result (next-for-relation sequences relation target scheme)]
             (if result
               {:exit (exit-codes :success), :out result}
               {:exit (exit-codes :usage),
@@ -403,12 +402,7 @@ Commands:
         "new" (let [[relation target] rest-args
                     {:keys [sequences]} (silo-sequences context)
                     signature
-                      (case relation
-                        "parent" (sequence/next-parent sequences scheme)
-                        "child" (sequence/next-child sequences target scheme)
-                        "sibling"
-                          (sequence/next-sibling sequences target scheme)
-                        nil)]
+                      (next-for-relation sequences relation target scheme)]
                 (if signature
                   (let [changes (assoc (new-changes-from-options options)
                                   :signature signature)
@@ -449,30 +443,27 @@ Commands:
         "reparent"
           (let [[file target-sequence] rest-args]
             (if (and file target-sequence)
-              (let [{:keys [sequences]} (silo-sequences context)
+              (let [{:keys [sequences by-sequence]} (silo-sequences context)
                     old-sequence (sequence/file-sequence file)
                     new-sequence
                       (sequence/next-child sequences target-sequence scheme)
-                    plans
-                      (into
-                        [(rename/plan-rename file
-                                             {:signature new-sequence}
-                                             context
-                                             {})]
-                        (when (and (:recursive options) old-sequence)
-                          (let [{:keys [by-sequence]} (silo-sequences context)
-                                descendants (sequence/relative sequences
-                                                               old-sequence
-                                                               :all-children
-                                                               scheme)]
-                            (for [descendant descendants]
-                              (rename/plan-rename
-                                (by-sequence descendant)
-                                {:signature (str new-sequence
-                                                 (subs descendant
-                                                       (count old-sequence)))}
-                                context
-                                {})))))]
+                    plans (into
+                            [(rename/plan-rename file
+                                                 {:signature new-sequence}
+                                                 context
+                                                 {})]
+                            (when (and (:recursive options) old-sequence)
+                              (for [descendant (sequence/relative sequences
+                                                                  old-sequence
+                                                                  :all-children
+                                                                  scheme)]
+                                (rename/plan-rename
+                                  (by-sequence descendant)
+                                  {:signature (str new-sequence
+                                                   (subs descendant
+                                                         (count old-sequence)))}
+                                  context
+                                  {}))))]
                 (apply-or-confirm plans options))
               {:exit (exit-codes :usage),
                :out "Usage: denote seq reparent FILE TARGET-SEQUENCE"}))

@@ -275,9 +275,10 @@
 
 (defn- largest-by-length
   [sequences scheme]
-  (let [longest (apply max (map #(length-sans-delimiter % scheme) sequences))
-        largest (filter #(= longest (length-sans-delimiter % scheme))
-                  sequences)]
+  (let [with-length (map (juxt identity #(length-sans-delimiter % scheme))
+                      sequences)
+        longest (apply max (map second with-length))
+        largest (keep (fn [[s len]] (when (= len longest) s)) with-length)]
     (if (= 1 (count largest)) (first largest) largest)))
 
 (defn- largest
