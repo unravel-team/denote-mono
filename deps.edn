@@ -6,6 +6,8 @@
    {;; Components
     denote-mono/file-type {:local/root "components/file_type"}
     denote-mono/filename {:local/root "components/filename"}
+    denote-mono/filesystem {:local/root "components/filesystem"}
+    denote-mono/process {:local/root "components/process"}
     denote-mono/slug {:local/root "components/slug"}
 
     ;; Bases
@@ -18,12 +20,16 @@
                 org.clojure/test.check {:mvn/version "1.1.1"}}
    :extra-paths ["components/file_type/test"
                  "components/filename/test"
+                 "components/filesystem/test"
+                 "components/process/test"
                  "components/slug/test"
                  "bases/cli/test"
                  "projects/denote-cli/test"]
    :main-opts ["-m" "cognitect.test-runner"
                "-d" "components/file_type/test"
                "-d" "components/filename/test"
+               "-d" "components/filesystem/test"
+               "-d" "components/process/test"
                "-d" "components/slug/test"
                "-d" "bases/cli/test"
                "-d" "projects/denote-cli/test"]}
