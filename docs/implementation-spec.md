@@ -1050,10 +1050,11 @@ May intentionally differ:
 - [x] Add rename plan data model before applying mutations.
 
 Implementation status (phases of section 15): 0 through 5 are done, plus the
-new-note workflow of section 8.1 (a `note` component). Phase 6 distribution
-polish (native image, completions, packaging) remains. Known v1 deltas from
-this spec: `fzf` interactive selection is not yet wired into `find`/`open`
-(non-interactive output works), `rename --break-links` guard and
-`rename-many --from-stdin` are not implemented, and `seq tree`/`seq open
-next-sibling` views are pending.
+new-note workflow of section 8.1 (a `note` component), `fzf` selection for
+`find`/`open` (`--fzf`, or automatically on an interactive terminal for
+`open`), the `rename --break-links` backlink guard (also applied to
+`rename-many`), and `seq tree`. Phase 6 distribution polish (native image,
+completions, packaging) remains. Known v1 deltas from this spec:
+`rename-many --from-stdin` and `seq open next-sibling`/`prev-sibling`
+navigation are not implemented.
 
