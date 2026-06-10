@@ -1,0 +1,2 @@
+{:paths ["src"]
+ :deps {denote-mono/process {:local/root "../process"}}}
