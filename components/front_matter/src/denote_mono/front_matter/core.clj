@@ -7,7 +7,7 @@
   (:require [clojure.string :as str]
             [denote-mono.file-type.interface :as file-type]
             [denote-mono.slug.interface :as slug])
-  (:import (java.time LocalDate LocalDateTime)
+  (:import (java.time LocalDate LocalDateTime ZoneId)
            (java.time.format DateTimeFormatter)))
 
 ;; Raw templates, byte-for-byte from denote-org-front-matter and friends.
@@ -66,7 +66,10 @@
                         :org-timestamp "'['yyyy-MM-dd EEE HH:mm']'"
                         :rfc3339 "yyyy-MM-dd'T'HH:mm:ssxxx"
                         "yyyy-MM-dd"))]
-      (.format parsed (DateTimeFormatter/ofPattern pattern)))
+      ;; Format through a zoned date-time so offset patterns (RFC3339)
+      ;; work; zone-free patterns are unaffected.
+      (.format (.atZone ^LocalDateTime parsed (ZoneId/systemDefault))
+               (DateTimeFormatter/ofPattern pattern)))
     ""))
 
 (defn- has-value?
