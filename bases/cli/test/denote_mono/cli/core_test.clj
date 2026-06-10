@@ -131,6 +131,77 @@
                      (str *notes-root*
                           "/20240101T000000--alpha__clojure_extra.org")))))))
 
+(deftest new-command
+  (testing "dry-run prints planned path"
+    (let [{:keys [exit out]} (run-cli "new" "--title"
+                                      "Fresh Note" "--keyword"
+                                      "kw" "--date"
+                                      "2025-05-05 05:05:05" "--dry-run")]
+      (is (zero? exit))
+      (is (str/ends-with? out "/20250505T050505--fresh-note__kw.org"))
+      (is (not (.exists (java.io.File. ^String out))))))
+  (testing "new creates the file with front matter"
+    (let [{:keys [exit out]} (run-cli "new"
+                                      "--title" "Fresh Note"
+                                      "--date" "2025-05-05 05:05:05")]
+      (is (zero? exit))
+      (is (str/includes? (slurp out) "#+title:      Fresh Note")))))
+
+(deftest seq-commands
+  (testing "validate"
+    (is (zero? (:exit (run-cli "seq" "validate" "1=1"))))
+    (is (= 3 (:exit (run-cli "seq" "validate" "not-a-seq")))))
+  (testing "next parent with no sequences starts at 1"
+    (is (= "1" (:out (run-cli "seq" "next" "parent")))))
+  (testing "seq new parent creates a note with signature"
+    (let [{:keys [exit out]} (run-cli "seq"
+                                      "new" "parent"
+                                      "--title" "Seq Root"
+                                      "--date" "2025-06-06 06:06:06")]
+      (is (zero? exit))
+      (is (str/includes? out "==1--seq-root"))
+      (testing "next child of the new parent"
+        (is (= "1=1" (:out (run-cli "seq" "next" "child" "1")))))
+      (testing "seq list shows it"
+        (is (str/includes? (:out (run-cli "seq" "list")) "1\t")))))
+  (testing "as-parent assigns the next top-level sequence to a plain note"
+    ;; The seq-root note above holds sequence 1, so beta becomes 2.
+    (let [{:keys [exit]} (run-cli "seq"
+                                  "as-parent"
+                                  (str *notes-root*
+                                       "/20240102T000000--beta__notes.org"))
+          renamed (str *notes-root* "/20240102T000000==2--beta__notes.org")]
+      (is (zero? exit))
+      (is (.exists (java.io.File. ^String renamed)))
+      (testing "as-parent aborts when a sequence already exists"
+        (is (= 3 (:exit (run-cli "seq" "as-parent" renamed)))))
+      (testing "convert to alphanumeric (dry run shows plan)"
+        (let [{:keys [out]} (run-cli "seq"
+                                     "convert"
+                                     renamed
+                                     "--to"
+                                     "alphanumeric"
+                                     "--dry-run")]
+          (is (str/includes? out "==2--beta")))))))
+
+(deftest seq-reparent-command
+  ;; build a small hierarchy: 1, 1=1, and 2; reparent 2 under 1
+  (run-cli "seq" "new" "parent" "--title" "one" "--date" "2025-01-01 00:00:00")
+  (run-cli "seq" "new"
+           "child" "1"
+           "--title" "one-one"
+           "--date" "2025-01-02 00:00:00")
+  (run-cli "seq" "new" "parent" "--title" "two" "--date" "2025-01-03 00:00:00")
+  (let [two-path (str *notes-root* "/20250103T000000==2--two.org")]
+    (testing "without --yes, prints plan and asks"
+      (is (= 3 (:exit (run-cli "seq" "reparent" two-path "1")))))
+    (testing "with --yes, renames to next child of target"
+      (let [{:keys [exit]} (run-cli "seq" "reparent" two-path "1" "--yes")]
+        (is (zero? exit))
+        (is (.exists (java.io.File. (str
+                                      *notes-root*
+                                      "/20250103T000000==1=2--two.org"))))))))
+
 (deftest silo-commands
   (testing "silo list shows names and paths"
     (let [{:keys [exit out]} (run-cli "silo" "list")]

@@ -7,8 +7,10 @@
             [clojure.tools.cli :as tools-cli]
             [denote-mono.config.interface :as config]
             [denote-mono.editor.interface :as editor]
+            [denote-mono.note.interface :as note]
             [denote-mono.rename.interface :as rename]
             [denote-mono.search.interface :as search]
+            [denote-mono.sequence.interface :as sequence]
             [denote-mono.silo.interface :as silo])
   (:gen-class))
 
@@ -41,6 +43,15 @@ Commands:
   rename-many F... Batch rename (--add-keyword --remove-keyword
                    --replace-keywords KW,KW --from-front-matter
                    --dry-run --yes)
+  new              Create a note (--title --keyword --signature --id
+                   --date --type --subdir --dry-run --reuse-empty)
+  seq validate SEQ [--scheme S]
+  seq next parent|child SEQ|sibling SEQ
+  seq new parent|child SEQ|sibling SEQ [new options]
+  seq list [--prefix SEQ]
+  seq convert FILE... --to SCHEME [--dry-run --yes]
+  seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
+  seq as-parent FILE [--dry-run]
   silo list        List configured silos
   silo path [NAME] Print the path of a silo
   silo doctor      Check that configured silos exist
@@ -79,6 +90,17 @@ Commands:
         [nil "--remove-keyword KW" "Remove a keyword from every file"]
         [nil "--replace-keywords KWS" "Replace keywords (comma-separated)"]
         [nil "--from-front-matter" "Take components from front matter"]))
+
+(def ^:private new-options
+  [[nil "--title TITLE" "Note title"]
+   [nil "--keyword KW" "Keyword (repeatable)" :assoc-fn
+    (fn [m k v] (update m k (fnil conj []) v))]
+   [nil "--signature SIG" "Signature"] [nil "--id ID" "Explicit identifier"]
+   [nil "--date DATE" "Creation date, e.g. \"2024-12-09 10:55:50\""]
+   [nil "--type TYPE" "org, markdown-yaml, markdown-toml, or text" :parse-fn
+    keyword] [nil "--subdir PATH" "Subdirectory inside the silo"]
+   [nil "--dry-run" "Print the planned path without creating"]
+   [nil "--reuse-empty" "Reuse an existing empty file"]])
 
 (defn- load-validated-config
   [global-opts env]
@@ -230,6 +252,193 @@ Commands:
                                          (count applied)
                                          " file(s)")})))))))
 
+(defn- new-changes-from-options
+  [options]
+  (cond-> {}
+    (:title options) (assoc :title (:title options))
+    (:keyword options) (assoc :keywords (:keyword options))
+    (:signature options) (assoc :signature (:signature options))
+    (:id options) (assoc :identifier (:id options))
+    (:date options) (assoc :date (:date options))
+    (:type options) (assoc :type (:type options))
+    (:subdir options) (assoc :subdir (:subdir options))))
+
+(defn- handle-new
+  [context args]
+  (let [{:keys [options errors]} (tools-cli/parse-opts args new-options)]
+    (if errors
+      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (let [plan (note/plan-new (new-changes-from-options options) context {})]
+        (if (:dry-run options)
+          {:exit (exit-codes :success), :out (:path plan)}
+          (let [created (note/create plan
+                                     {:reuse-empty? (:reuse-empty options)})]
+            {:exit (exit-codes :success), :out (:path created)}))))))
+
+(defn- silo-sequences
+  "All valid sequences among the silo's notes, with their paths.
+  Returns {:sequences [...] :by-sequence {sequence path}}."
+  [context]
+  (let [pairs (keep (fn [{:keys [path]}]
+                      (when-let [s (sequence/file-sequence path)] [s path]))
+                    (search/list-notes context {} {}))]
+    {:sequences (mapv first pairs), :by-sequence (into {} pairs)}))
+
+(defn- scheme-from
+  [context options]
+  (or (:scheme options) (get-in context [:config :sequence :scheme]) :numeric))
+
+(defn- apply-or-confirm
+  "Shared --dry-run/--yes gate for seq mutations over rename PLANS."
+  [plans options]
+  (let [table (str/join "\n" (map render-plan plans))]
+    (cond (:dry-run options) {:exit (exit-codes :success), :out table}
+          (not (:yes options)) {:exit (exit-codes :validation),
+                                :out (str table
+                                          "\nRe-run with --yes to apply.")}
+          :else (do (doseq [plan plans] (rename/validate-plan plan {}))
+                    (let [{:keys [applied failed pending]}
+                            (rename/apply-batch plans {})]
+                      (if failed
+                        {:exit (exit-codes :failure),
+                         :out (str "Applied " (count applied)
+                                   ", failed: " (:error failed)
+                                   ", pending " (count pending))}
+                        {:exit (exit-codes :success),
+                         :out (str "Renamed " (count applied) " file(s)")}))))))
+
+(def ^:private seq-options
+  (conj new-options
+        [nil "--scheme SCHEME" "numeric, alphanumeric, alphanumeric-delimited"
+         :parse-fn keyword]
+        [nil "--to SCHEME" "Target scheme for convert" :parse-fn keyword]
+        [nil "--prefix SEQ" "Restrict to sequences under this prefix"]
+        [nil "--recursive" "Also reparent descendants"]
+        [nil "--yes" "Apply without confirmation"]))
+
+(defn- handle-seq
+  [context args]
+  (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
+                                                                 seq-options)
+        [subcommand & rest-args] arguments
+        scheme (scheme-from context options)]
+    (if errors
+      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (case subcommand
+        "validate"
+          (let [s (first rest-args)
+                valid? (if (:scheme options)
+                         (sequence/valid-for-scheme? (:scheme options) s)
+                         (sequence/valid? s))]
+            (if valid?
+              {:exit (exit-codes :success), :out (str s " is valid")}
+              {:exit (exit-codes :validation), :out (str s " is not valid")}))
+        "next"
+          (let [[relation target] rest-args
+                {:keys [sequences]} (silo-sequences context)
+                result (case relation
+                         "parent" (sequence/next-parent sequences scheme)
+                         "child" (sequence/next-child sequences target scheme)
+                         "sibling"
+                           (sequence/next-sibling sequences target scheme)
+                         nil)]
+            (if result
+              {:exit (exit-codes :success), :out result}
+              {:exit (exit-codes :usage),
+               :out "Usage: denote seq next parent|child SEQ|sibling SEQ"}))
+        "new" (let [[relation target] rest-args
+                    {:keys [sequences]} (silo-sequences context)
+                    signature
+                      (case relation
+                        "parent" (sequence/next-parent sequences scheme)
+                        "child" (sequence/next-child sequences target scheme)
+                        "sibling"
+                          (sequence/next-sibling sequences target scheme)
+                        nil)]
+                (if signature
+                  (let [changes (assoc (new-changes-from-options options)
+                                  :signature signature)
+                        plan (note/plan-new changes context {})]
+                    (if (:dry-run options)
+                      {:exit (exit-codes :success), :out (:path plan)}
+                      {:exit (exit-codes :success),
+                       :out (:path (note/create plan
+                                                {:reuse-empty? (:reuse-empty
+                                                                 options)}))}))
+                  {:exit (exit-codes :usage),
+                   :out "Usage: denote seq new parent|child SEQ|sibling SEQ"}))
+        "list" (let [{:keys [sequences by-sequence]} (silo-sequences context)
+                     selected (if-let [prefix (:prefix options)]
+                                (sequence/sequences-with-prefix sequences
+                                                                prefix
+                                                                scheme)
+                                sequences)]
+                 {:exit (exit-codes :success),
+                  :out (str/join "\n"
+                                 (map #(str % "\t" (by-sequence %))
+                                   (sequence/sort-sequences selected)))})
+        "convert" (let [target (:to options)
+                        files rest-args]
+                    (if (and target (seq files))
+                      (let [plans
+                              (for [file files
+                                    :let [current (sequence/file-sequence file)]
+                                    :when current]
+                                (rename/plan-rename
+                                  file
+                                  {:signature (sequence/convert current target)}
+                                  context
+                                  {}))]
+                        (apply-or-confirm (vec plans) options))
+                      {:exit (exit-codes :usage),
+                       :out "Usage: denote seq convert FILE... --to SCHEME"}))
+        "reparent"
+          (let [[file target-sequence] rest-args]
+            (if (and file target-sequence)
+              (let [{:keys [sequences]} (silo-sequences context)
+                    old-sequence (sequence/file-sequence file)
+                    new-sequence
+                      (sequence/next-child sequences target-sequence scheme)
+                    plans
+                      (into
+                        [(rename/plan-rename file
+                                             {:signature new-sequence}
+                                             context
+                                             {})]
+                        (when (and (:recursive options) old-sequence)
+                          (let [{:keys [by-sequence]} (silo-sequences context)
+                                descendants (sequence/relative sequences
+                                                               old-sequence
+                                                               :all-children
+                                                               scheme)]
+                            (for [descendant descendants]
+                              (rename/plan-rename
+                                (by-sequence descendant)
+                                {:signature (str new-sequence
+                                                 (subs descendant
+                                                       (count old-sequence)))}
+                                context
+                                {})))))]
+                (apply-or-confirm plans options))
+              {:exit (exit-codes :usage),
+               :out "Usage: denote seq reparent FILE TARGET-SEQUENCE"}))
+        "as-parent"
+          (let [file (first rest-args)]
+            (cond (nil? file) {:exit (exit-codes :usage),
+                               :out "Usage: denote seq as-parent FILE"}
+                  (sequence/file-sequence file)
+                    {:exit (exit-codes :validation),
+                     :out (str file " already has a sequence signature")}
+                  :else (let [{:keys [sequences]} (silo-sequences context)
+                              signature (sequence/next-parent sequences scheme)
+                              plan (rename/plan-rename file
+                                                       {:signature signature}
+                                                       context
+                                                       {})]
+                          (apply-or-confirm [plan] (assoc options :yes true)))))
+        {:exit (exit-codes :usage),
+         :out (str "Unknown seq subcommand: " subcommand)}))))
+
 (defn- handle-silo
   [global-opts {:keys [env]} args]
   (let [cfg (load-validated-config global-opts env)
@@ -289,6 +498,10 @@ Commands:
                 (= command "rename-many") (handle-rename-many
                                             (make-context options harness)
                                             command-args)
+                (= command "new") (handle-new (make-context options harness)
+                                              command-args)
+                (= command "seq") (handle-seq (make-context options harness)
+                                              command-args)
                 :else {:exit (exit-codes :usage),
                        :out (str "Unknown command: " command "\n\n" help-text)})
           (catch clojure.lang.ExceptionInfo e
