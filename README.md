@@ -7,6 +7,7 @@ usable from the shell: list, filter, search, create, rename, and organize
 notes into Folgezettel hierarchies, all composable with Unix pipelines.
 
 The repository is a [Polylith](https://polylith.gitbook.io/) workspace.
+Architecture decisions are documented as ADRs in [docs/adr](docs/adr/README.md).
 
 ## Prerequisites
 
