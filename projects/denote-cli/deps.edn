@@ -1,4 +1,6 @@
-{:deps {denote-mono/cli {:local/root "../../bases/cli"}
+{:deps {;; Registers Clojure classes for build-time init in native-image.
+        com.github.clj-easy/graal-build-time {:mvn/version "1.0.5"}
+        denote-mono/cli {:local/root "../../bases/cli"}
         denote-mono/config {:local/root "../../components/config"}
         denote-mono/editor {:local/root "../../components/editor"}
         denote-mono/file-type {:local/root "../../components/file_type"}

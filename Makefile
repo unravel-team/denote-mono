@@ -57,6 +57,19 @@ test: test-unit ## Run default test suite
 build: check ## Build denote-cli uberjar
 	clojure -T:build uberjar :project denote-cli
 
+# Path to GraalVM's native-image: PATH first, then a user-local install
+# under ~/.local/share/graalvm (macOS bundle layout).
+NATIVE_IMAGE ?= $(or $(shell command -v native-image 2>/dev/null),$(lastword $(wildcard $(HOME)/.local/share/graalvm/*/Contents/Home/bin/native-image)))
+
+.PHONY: native
+native: build ## Build a native binary with GraalVM native-image
+	@test -n "$(NATIVE_IMAGE)" || { echo "native-image not found; install GraalVM or set NATIVE_IMAGE"; exit 1; }
+	$(NATIVE_IMAGE) -jar $$(ls -t projects/denote-cli/target/denote-cli-*-standalone.jar | head -1) \
+	  -o projects/denote-cli/target/denote \
+	  --features=clj_easy.graal_build_time.InitClojureClasses \
+	  --no-fallback
+	@echo "Native binary: projects/denote-cli/target/denote"
+
 .PHONY: clean
 clean: ## Delete generated artifacts
 	rm -rf target/ .cpcache/ projects/*/target

@@ -58,6 +58,51 @@ Alternatively, run straight from source without building a jar:
 clojure -M:dev -m denote-mono.cli.core help
 ```
 
+### Native binary (GraalVM)
+
+For a self-contained executable with instant startup (~10 ms vs ~750 ms on
+the JVM, ~17 MB binary), build a native image. You need GraalVM with
+`native-image`; either:
+
+```sh
+# Homebrew (installs system-wide):
+brew install --cask graalvm-jdk
+
+# or user-local, no sudo (macOS arm64 shown; pick your platform from
+# https://github.com/graalvm/graalvm-ce-builds/releases):
+mkdir -p ~/.local/share/graalvm && cd ~/.local/share/graalvm
+curl -fsSL -o graalvm.tar.gz \
+  https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-25.0.2/graalvm-community-jdk-25.0.2_macos-aarch64_bin.tar.gz
+tar xzf graalvm.tar.gz && rm graalvm.tar.gz
+```
+
+Then:
+
+```sh
+make native    # builds the uberjar, then compiles it to a native binary
+install -m 755 projects/denote-cli/target/denote ~/.local/bin/denote
+```
+
+`make native` finds `native-image` on your `PATH` or under
+`~/.local/share/graalvm`; override with `make native NATIVE_IMAGE=/path/to/native-image`.
+The build takes about a minute and ~1.5 GB of RAM.
+
+### Shell completions
+
+The binary generates its own completion scripts (derived from the same
+option tables the CLI parses with, so they never drift):
+
+```sh
+# bash — add to ~/.bashrc:
+source <(denote completions bash)
+
+# zsh — write to a directory on your $fpath:
+denote completions zsh > ~/.zsh/completions/_denote
+
+# fish:
+denote completions fish > ~/.config/fish/completions/denote.fish
+```
+
 ## Configure
 
 Create `$XDG_CONFIG_HOME/denote-mono/config.edn` (defaults to
@@ -157,6 +202,7 @@ seq convert FILE... --to SCHEME [--dry-run --yes]
 seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
 seq as-parent FILE
 silo list|path [NAME]|doctor
+completions bash|zsh|fish
 ```
 
 Exit codes: `0` success, `1` failure, `2` usage, `3` validation,
@@ -175,6 +221,7 @@ make test       # unit tests via cognitect test-runner (all bricks)
 make check      # tagref + clj-kondo + zprint
 make format     # zprint, in place
 make build      # check + uberjar
+make native     # uberjar + GraalVM native binary
 make repl       # REPL with all components on the classpath
 make test-poly  # tests via the Polylith tool (per-brick isolation)
 ```

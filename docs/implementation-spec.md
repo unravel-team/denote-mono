@@ -1053,8 +1053,10 @@ Implementation status (phases of section 15): 0 through 5 are done, plus the
 new-note workflow of section 8.1 (a `note` component), `fzf` selection for
 `find`/`open` (`--fzf`, or automatically on an interactive terminal for
 `open`), the `rename --break-links` backlink guard (also applied to
-`rename-many`), and `seq tree`. Phase 6 distribution polish (native image,
-completions, packaging) remains. Known v1 deltas from this spec:
+`rename-many`), and `seq tree`. From Phase 6: GraalVM native image builds
+(`make native`, ~10 ms startup) and generated shell completions
+(`denote completions bash|zsh|fish`) are done; Homebrew/Nix packaging and a
+manpage remain. Known v1 deltas from this spec:
 `rename-many --from-stdin` and `seq open next-sibling`/`prev-sibling`
 navigation are not implemented.
 
