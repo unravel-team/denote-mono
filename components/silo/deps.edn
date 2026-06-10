@@ -1,0 +1,3 @@
+{:paths ["src"]
+ :deps {denote-mono/config {:local/root "../config"}
+        denote-mono/filesystem {:local/root "../filesystem"}}}
