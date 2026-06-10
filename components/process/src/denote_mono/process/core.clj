@@ -41,3 +41,15 @@
              {:exit exit, :out (or out ""), :err (or err "")}))
          (catch java.io.IOException e
            {:exit 127, :out "", :err (ex-message e), :error :missing-binary}))))
+
+(defn select
+  "Run an interactive line selector (fzf and friends): feed CANDIDATES one
+  per line on stdin, return the selected lines as a vector. Returns nil when
+  the selector is missing or exits non-zero (e.g. the user cancelled).
+  Selectors like fzf draw their UI on /dev/tty, so piped stdin/stdout work."
+  [candidates argv]
+  (let [{:keys [exit out error]} (run argv
+                                      {:in (str (str/join "\n" candidates)
+                                                "\n")})]
+    (when (and (not error) (zero? exit))
+      (vec (remove str/blank? (str/split-lines out))))))
