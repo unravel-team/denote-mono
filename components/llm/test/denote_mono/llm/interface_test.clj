@@ -97,6 +97,52 @@
         (is (= :tool (:role tool-result)))
         (is (= {"error" "boom"} (json/read-str (:content tool-result))))))))
 
+(deftest on-event-test
+  (testing "the loop reports requests and tool calls as they happen"
+    (let [events (atom [])
+          _ (llm/run-tool-loop
+              (scripted [{:role :assistant,
+                          :content nil,
+                          :tool-calls [{:id "call_1",
+                                        :type "function",
+                                        :function {:name "get_weather",
+                                                   :arguments
+                                                   "{\"location\":\"Pune\"}"}}]}
+                         {:role :assistant, :content "Done."}]
+                        (atom []))
+              {:system "s",
+               :user "u",
+               :tools [],
+               :execute-tool (fn [_ _] {:ok true}),
+               :on-event #(swap! events conj %)})]
+      (is (= [{:event :request, :round 1}
+              {:event :tool-call,
+               :round 1,
+               :name "get_weather",
+               :args {:location "Pune"}} {:event :request, :round 2}]
+             @events))))
+  (testing "executor failures are reported as tool-error events"
+    (let [events (atom [])
+          _ (llm/run-tool-loop
+              (scripted [{:role :assistant,
+                          :content nil,
+                          :tool-calls [{:id "call_1",
+                                        :type "function",
+                                        :function {:name "explode",
+                                                   :arguments "{}"}}]}
+                         {:role :assistant, :content "Done."}]
+                        (atom []))
+              {:system "s",
+               :user "u",
+               :tools [],
+               :execute-tool (fn [_ _] (throw (ex-info "boom" {}))),
+               :on-event #(swap! events conj %)})]
+      (is (some
+            #(=
+               %
+               {:event :tool-error, :round 1, :name "explode", :message "boom"})
+            @events)))))
+
 (deftest max-rounds-test
   (testing "the loop gives up after :max-rounds tool rounds"
     (let [tool-call {:role :assistant,

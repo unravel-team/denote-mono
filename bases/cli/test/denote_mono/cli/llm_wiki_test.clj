@@ -105,6 +105,23 @@
                                   "--max-rounds" "1")]
       (is (= 5 exit)))))
 
+(deftest ingest-progress
+  (let [responses
+          [(tool-call "c1" "create_note" {:title "Alpha", :body "Body."})
+           {:role :assistant, :content "Done."}]]
+    (testing "on a terminal, progress is narrated on stderr"
+      (let [err (java.io.StringWriter.)
+            harness (assoc *harness*
+                      :tty? true
+                      :llm-complete (scripted responses))]
+        (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
+        (is (str/includes? (str err) "creating note: Alpha"))))
+    (testing "piped output stays silent"
+      (let [err (java.io.StringWriter.)
+            harness (assoc *harness* :llm-complete (scripted responses))]
+        (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
+        (is (= "" (str err)))))))
+
 (deftest query-command
   (testing "query prints the answer"
     (let [harness (assoc *harness*

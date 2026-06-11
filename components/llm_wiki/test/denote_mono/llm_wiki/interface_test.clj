@@ -410,6 +410,25 @@
       (is (str/includes? (fs/read-text (wiki-path context "log.md"))
                          "## [2026-06-11] ingest | notes.txt")))))
 
+(deftest ingest-progress-test
+  (testing "ingest narrates the loop through :on-progress"
+    (let [context (make-context)
+          source (str (temp-dir) "/notes.txt")
+          _ (spit source "Raw text.")
+          messages (atom [])
+          context (assoc context
+                    :on-progress #(swap! messages conj %)
+                    :llm-complete (scripted
+                                    [(tool-call "c1"
+                                                "create_note"
+                                                {:title "Alpha", :body "Body."})
+                                     {:role :assistant, :content "Done."}]))]
+      (llm-wiki/ingest context source {:date "2026-06-11"})
+      (is (some #(str/includes? % "notes.txt") @messages))
+      (is (some #(str/includes? % "round 1") @messages))
+      (is (some #(str/includes? % "creating note: Alpha") @messages))
+      (is (some #(str/includes? % "index") @messages)))))
+
 (deftest ingest-missing-source-test
   (let [context (assoc (make-context)
                   :llm-complete

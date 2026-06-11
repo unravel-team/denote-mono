@@ -665,9 +665,18 @@ Commands:
         {:exit (exit-codes :usage),
          :out (str "Unknown seq subcommand: " subcommand)}))))
 
+(defn- stderr-progress
+  "Print one progress line to stderr immediately, keeping stdout clean
+  for the command's real output."
+  [message]
+  (binding [*out* *err*]
+    (println message)
+    (flush)))
+
 (defn- make-llm-wiki-context
   "Like make-context but resolved against llm-wiki silos only; carries the
-  harness's :llm-complete so tests can script the LLM."
+  harness's :llm-complete so tests can script the LLM. On a terminal,
+  agentic operations narrate their progress to stderr."
   [global-opts {:keys [env cwd tty? llm-complete]}]
   (let [cfg (load-validated-config global-opts env)]
     {:config cfg,
@@ -678,7 +687,8 @@ Commands:
      :env env,
      :cwd cwd,
      :tty? tty?,
-     :llm-complete llm-complete}))
+     :llm-complete llm-complete,
+     :on-progress (when tty? stderr-progress)}))
 
 (defn- handle-llm-wiki-lint
   [context options]

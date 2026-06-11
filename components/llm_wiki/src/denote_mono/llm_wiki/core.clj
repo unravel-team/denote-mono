@@ -59,6 +59,34 @@
 
 (defn- entry-date [opts] (or (:date opts) (str (LocalDate/now))))
 
+(defn- event->message
+  "Human one-liner for a tool-loop progress event."
+  [{:keys [event round name args message]}]
+  (case event
+    :request (str "round " round ": waiting for the model...")
+    :tool-call (str "round " round
+                    ": " (case name
+                           "list_notes" "listing notes"
+                           "read_note" (str "reading " (:path args))
+                           "search_notes" (str "searching: " (:query args))
+                           "create_note" (str "creating note: " (:title args))
+                           "update_note" (str "updating " (:path args))
+                           name))
+    :tool-error (str "round " round ": " name " failed: " message)
+    nil))
+
+(defn- progress-fn
+  "The context's :on-progress (a fn of one string), or a no-op."
+  [context]
+  (or (:on-progress context) (constantly nil)))
+
+(defn- on-event-fn
+  [context]
+  (let [progress (progress-fn context)]
+    (fn [event]
+      (some-> (event->message event)
+              progress))))
+
 ;;;; Ingest
 
 (def ^:private ingest-instructions
@@ -89,9 +117,11 @@
   [context source-path opts]
   (validate-source! source-path)
   (let [abs (fs/canonical source-path)
+        progress (progress-fn context)
         _ (scaffold/scaffold context)
         complete (complete-fn context opts)
         state (atom {:created [], :updated [], :default-sources [abs]})
+        _ (progress (str "ingesting " (basename abs)))
         result (llm/run-tool-loop
                  complete
                  {:system
@@ -101,8 +131,10 @@
                              "\n\nCurrent index:\n\n" (current-index context)),
                   :tools (tools/tool-schemas :ingest),
                   :execute-tool (tools/make-execute-tool context state),
-                  :max-rounds (max-rounds context opts)})
+                  :max-rounds (max-rounds context opts),
+                  :on-event (on-event-fn context)})
         {:keys [created updated]} @state]
+    (progress "updating index and log")
     (index/regenerate-index context)
     (scaffold/append-log context
                          {:date (entry-date opts),
@@ -182,7 +214,8 @@
                              (current-index context)),
                   :tools (tools/tool-schemas :query),
                   :execute-tool (tools/make-execute-tool context state),
-                  :max-rounds (max-rounds context opts)})
+                  :max-rounds (max-rounds context opts),
+                  :on-event (on-event-fn context)})
         answer (:final-text result)
         saved (when (and (:save? opts) (not (str/blank? answer)))
                 (save-answer context question answer opts))]
@@ -209,5 +242,6 @@
                              "\n\nAudit the wiki and report your findings."),
                   :tools (tools/tool-schemas :query),
                   :execute-tool (tools/make-execute-tool context state),
-                  :max-rounds (max-rounds context opts)})]
+                  :max-rounds (max-rounds context opts),
+                  :on-event (on-event-fn context)})]
     {:report (:final-text result)}))
