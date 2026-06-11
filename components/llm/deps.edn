@@ -1,0 +1,6 @@
+{:paths ["src"]
+ ;; Flip to {:local/root "/Users/nejo/src/unravel-team/litellm-clj/litellm-clj.root"}
+ ;; when developing against a local litellm-clj checkout.
+ :deps {tech.unravel/litellm-clj {:mvn/version "0.3.0-alpha.2"
+                                  :exclusions [ch.qos.logback/logback-classic]}
+        org.clojure/data.json {:mvn/version "2.5.0"}}}
