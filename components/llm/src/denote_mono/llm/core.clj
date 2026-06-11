@@ -7,15 +7,17 @@
 
 (defn make-complete-fn
   "Build (fn [request-map] response-map) bound to LLM-CONFIG
-  {:provider KW :model STR :api-key STR :api-base STR-or-nil}.
-  Provider/HTTP failures are rethrown as ex-info {:type :tool}."
-  [{:keys [provider model api-key api-base]}]
+  {:provider KW :model STR :api-key STR :api-base STR-or-nil
+  :timeout-ms N-or-nil}. Provider/HTTP failures are rethrown as ex-info
+  {:type :tool}."
+  [{:keys [provider model api-key api-base timeout-ms]}]
   (fn [request]
     (try (litellm/completion provider
                              model
                              request
                              (cond-> {:api-key api-key}
-                               api-base (assoc :api-base api-base)))
+                               api-base (assoc :api-base api-base)
+                               timeout-ms (assoc :timeout timeout-ms)))
          (catch Exception e
            (throw (ex-info (str "LLM request failed: " (ex-message e))
                            {:type :tool, :provider provider, :model model}

@@ -17,7 +17,8 @@
             :model "claude-opus-4-8",
             :api-key-env "ANTHROPIC_API_KEY",
             :api-base nil,
-            :max-rounds 20}
+            :max-rounds 20,
+            :timeout-ms 300000}
            (:llm defaults)))))
 
 (deftest config-path-test

@@ -24,7 +24,10 @@
   {:type "function",
    :function
    {:name "read_note",
-    :description "Read the full content of one wiki note.",
+    :description
+    (str "Read the full content of one wiki note. Only notes inside the"
+         " wiki can be read; the raw source text is already provided in"
+         " the conversation, so never try to read source files."),
     :parameters
     {:type "object",
      :properties
