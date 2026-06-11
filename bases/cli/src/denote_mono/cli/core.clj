@@ -52,11 +52,10 @@ Commands:
                    --break-links --dry-run --yes)
   new              Create a note (--title --keyword --signature --id
                    --date --type --subdir --dry-run --reuse-empty)
-  seq validate SEQ [--scheme S]
   seq next parent|child SEQ|sibling SEQ
   seq new parent|child SEQ|sibling SEQ [new options]
-  seq list [--prefix SEQ] [--depth N]
-  seq tree [--prefix SEQ] [--depth N]
+  seq list [SEQ] [--depth N]
+  seq tree [SEQ] [--depth N]
   seq convert FILE... --to SCHEME [--dry-run --yes]
   seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
   seq as-parent FILE [--dry-run]
@@ -454,7 +453,6 @@ Commands:
         [nil "--scheme SCHEME" "numeric, alphanumeric, alphanumeric-delimited"
          :parse-fn keyword]
         [nil "--to SCHEME" "Target scheme for convert" :parse-fn keyword]
-        [nil "--prefix SEQ" "Restrict to sequences under this prefix"]
         [nil "--depth N" "Restrict to sequences up to this depth" :parse-fn
          parse-long]
         [nil "--recursive" "Also reparent descendants"]
@@ -473,8 +471,7 @@ Commands:
    {:name "seq",
     :description "Folgezettel sequence operations",
     :options seq-options,
-    :subcommands ["as-parent" "convert" "list" "new" "next" "reparent" "tree"
-                  "validate"]}
+    :subcommands ["as-parent" "convert" "list" "new" "next" "reparent" "tree"]}
    {:name "silo",
     :description "Silo operations",
     :options [],
@@ -493,11 +490,11 @@ Commands:
      :out "Usage: denote completions bash|zsh|fish"}))
 
 (defn- selected-sequences
-  "Filter SEQUENCES by the --prefix and --depth seq options."
-  [sequences options scheme]
+  "Filter SEQUENCES to those under PREFIX (when given) and within the
+  --depth seq option."
+  [sequences prefix options scheme]
   (cond->> sequences
-    (:prefix options)
-      (#(sequence/sequences-with-prefix % (:prefix options) scheme))
+    prefix (#(sequence/sequences-with-prefix % prefix scheme))
     (:depth options) (filter #(<= (sequence/depth %) (:depth options)))))
 
 (defn- handle-seq
@@ -509,14 +506,6 @@ Commands:
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
       (case subcommand
-        "validate"
-          (let [s (first rest-args)
-                valid? (if (:scheme options)
-                         (sequence/valid-for-scheme? (:scheme options) s)
-                         (sequence/valid? s))]
-            (if valid?
-              {:exit (exit-codes :success), :out (str s " is valid")}
-              {:exit (exit-codes :validation), :out (str s " is not valid")}))
         "next"
           (let [[relation target] rest-args
                 {:keys [sequences]} (silo-sequences context)
@@ -541,18 +530,19 @@ Commands:
                                                                  options)}))}))
                   {:exit (exit-codes :usage),
                    :out "Usage: denote seq new parent|child SEQ|sibling SEQ"}))
-        "list" (let [{:keys [sequences by-sequence]} (silo-sequences context)
-                     selected (selected-sequences sequences options scheme)]
-                 {:exit (exit-codes :success),
-                  :out (str/join
-                         "\n"
-                         (map #(str % "\t" (:relative-path (by-sequence %)))
-                           (sequence/sort-sequences selected)))})
+        "list"
+          (let [{:keys [sequences by-sequence]} (silo-sequences context)
+                prefix (first rest-args)
+                selected (selected-sequences sequences prefix options scheme)]
+            {:exit (exit-codes :success),
+             :out (str/join "\n"
+                            (map #(str % "\t" (:relative-path (by-sequence %)))
+                              (sequence/sort-sequences selected)))})
         "tree" (let [{:keys [sequences by-sequence]} (silo-sequences context)
-                     selected (selected-sequences sequences options scheme)
-                     base-depth (if-let [prefix (:prefix options)]
-                                  (sequence/depth prefix)
-                                  1)]
+                     prefix (first rest-args)
+                     selected
+                       (selected-sequences sequences prefix options scheme)
+                     base-depth (if prefix (sequence/depth prefix) 1)]
                  {:exit (exit-codes :success),
                   :out (str/join "\n"
                                  (for [s (sequence/sort-sequences selected)

@@ -311,9 +311,8 @@
       (is (str/includes? (slurp out) "#+title:      Fresh Note")))))
 
 (deftest seq-commands
-  (testing "validate"
-    (is (zero? (:exit (run-cli "seq" "validate" "1=1"))))
-    (is (= 3 (:exit (run-cli "seq" "validate" "not-a-seq")))))
+  (testing "validate is no longer a subcommand"
+    (is (= 2 (:exit (run-cli "seq" "validate" "1=1")))))
   (testing "next parent with no sequences starts at 1"
     (is (= "1" (:out (run-cli "seq" "next" "parent")))))
   (testing "seq new parent creates a note with signature"
@@ -366,8 +365,8 @@
               "    1=1=1  20250103T000000==1=1=1--one-one-one.org"
               "2  20250104T000000==2--two.org"]
              (str/split-lines out)))))
-  (testing "--prefix rebases indentation on the subtree"
-    (let [{:keys [out]} (run-cli "seq" "tree" "--prefix" "1=1")]
+  (testing "a positional SEQ rebases indentation on the subtree"
+    (let [{:keys [out]} (run-cli "seq" "tree" "1=1")]
       (is (= ["1=1  20250102T000000==1=1--one-one.org"
               "  1=1=1  20250103T000000==1=1=1--one-one-one.org"]
              (str/split-lines out)))))
@@ -376,7 +375,13 @@
       (is (= ["1  20250101T000000==1--one.org"
               "  1=1  20250102T000000==1=1--one-one.org"
               "2  20250104T000000==2--two.org"]
-             (str/split-lines out))))))
+             (str/split-lines out)))))
+  (testing "seq list takes the same positional SEQ"
+    (let [{:keys [out]} (run-cli "seq" "list" "1=1")]
+      (is (= ["1=1" "1=1=1"]
+             (map #(first (str/split % #"\t")) (str/split-lines out))))))
+  (testing "--prefix is gone"
+    (is (= 2 (:exit (run-cli "seq" "tree" "--prefix" "1=1"))))))
 
 (deftest seq-reparent-command
   ;; build a small hierarchy: 1, 1=1, and 2; reparent 2 under 1
