@@ -470,32 +470,70 @@ Commands:
    [nil "--max-rounds N" "Cap agentic tool rounds" :parse-fn parse-long]])
 
 (def ^:private command-spec
-  "Command surface used for dispatch documentation and completion scripts."
-  [{:name "find", :description "Find notes", :options find-options}
-   {:name "grep", :description "Search note contents", :options []}
+  "Command surface used for dispatch documentation, per-command --help,
+  and completion scripts."
+  [{:name "find",
+    :usage "find [QUERY] [OPTIONS]",
+    :description "Find notes",
+    :options find-options}
+   {:name "grep",
+    :usage "grep QUERY",
+    :description "Search note contents",
+    :options []}
    {:name "backlinks",
+    :usage "backlinks FILE_OR_ID",
     :description "Notes linking to the given note",
     :options []}
-   {:name "links", :description "Outgoing links of a note", :options []}
-   {:name "rename", :description "Rename one file", :options rename-options}
-   {:name "new", :description "Create a note", :options new-options}
+   {:name "links",
+    :usage "links FILE_OR_ID",
+    :description "Outgoing links of a note",
+    :options []}
+   {:name "rename",
+    :usage "rename FILE [OPTIONS]",
+    :description "Rename one file",
+    :options rename-options}
+   {:name "new",
+    :usage "new [OPTIONS]",
+    :description "Create a note",
+    :options new-options}
    {:name "llm-wiki",
+    :usage "llm-wiki ingest FILE | query QUESTION | lint [OPTIONS]",
     :description "LLM-maintained wiki operations",
     :options llm-wiki-options,
     :subcommands ["ingest" "lint" "query"]}
    {:name "seq",
+    :usage "seq SUBCOMMAND [ARGS] [OPTIONS]",
     :description "Folgezettel sequence operations",
     :options seq-options,
     :subcommands ["as-parent" "convert" "list" "new" "next" "reparent" "tree"]}
    {:name "silo",
+    :usage "silo list | path [NAME] | doctor",
     :description "Silo operations",
     :options [],
     :subcommands ["doctor" "list" "path"]}
    {:name "completions",
+    :usage "completions bash|zsh|fish",
     :description "Print a shell completion script",
     :options [],
     :subcommands ["bash" "fish" "zsh"]}
-   {:name "help", :description "Show help", :options []}])
+   {:name "help", :usage "help", :description "Show help", :options []}])
+
+(defn- command-help
+  "Per-command help text rendered from command-spec, or nil for an
+  unknown command. The options summary comes from the same tables the
+  command parses with, so it cannot drift."
+  [command]
+  (when-let [{:keys [name usage description options subcommands]}
+               (some #(when (= command (:name %)) %) command-spec)]
+    (str "Usage: denote "
+         (or usage name)
+         "\n\n"
+         description
+         (when (seq subcommands)
+           (str "\n\nSubcommands: " (str/join ", " subcommands)))
+         (when (seq options)
+           (str "\n\nOptions:\n"
+                (:summary (tools-cli/parse-opts [] options)))))))
 
 (defn- handle-completions
   [args]
@@ -754,37 +792,39 @@ Commands:
    (let [{:keys [options arguments errors]}
            (tools-cli/parse-opts args global-options :in-order true)
          [command & command-args] arguments]
-     (try (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-                (or (:version options) (= "version" command))
-                  {:exit (exit-codes :success), :out (version-string)}
-                (or (nil? command) (:help options) (= "help" command))
-                  {:exit (exit-codes :success), :out help-text}
-                (= command "silo") (handle-silo options harness command-args)
-                (= command "find") (handle-find (make-context options harness)
-                                                command-args)
-                (= command "rename")
-                  (handle-rename options harness command-args)
-                (= command "new") (handle-new (make-context options harness)
-                                              command-args)
-                (= command "grep") (handle-grep (make-context options harness)
-                                                command-args)
-                (= command "backlinks")
-                  (handle-backlinks (make-context options harness) command-args)
-                (= command "links") (handle-links (make-context options harness)
-                                                  command-args)
-                (= command "seq") (handle-seq (make-context options harness)
-                                              command-args)
-                (= command "llm-wiki")
-                  (handle-llm-wiki options harness command-args)
-                (= command "completions") (handle-completions command-args)
-                :else {:exit (exit-codes :usage),
-                       :out (str "Unknown command: " command "\n\n" help-text)})
-          (catch clojure.lang.ExceptionInfo e
-            {:exit (exit-codes (or (:type (ex-data e)) :failure)),
-             :out (str (ex-message e)
-                       (when-let [silos (seq (:silos (ex-data e)))]
-                         (str "\nConfigured silos: "
-                              (str/join ", " (map name silos)))))})))))
+     (try
+       (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+             (or (:version options) (= "version" command))
+               {:exit (exit-codes :success), :out (version-string)}
+             (or (nil? command) (:help options) (= "help" command))
+               {:exit (exit-codes :success), :out help-text}
+             (and (some #{"--help" "-h"} command-args) (command-help command))
+               {:exit (exit-codes :success), :out (command-help command)}
+             (= command "silo") (handle-silo options harness command-args)
+             (= command "find") (handle-find (make-context options harness)
+                                             command-args)
+             (= command "rename") (handle-rename options harness command-args)
+             (= command "new") (handle-new (make-context options harness)
+                                           command-args)
+             (= command "grep") (handle-grep (make-context options harness)
+                                             command-args)
+             (= command "backlinks")
+               (handle-backlinks (make-context options harness) command-args)
+             (= command "links") (handle-links (make-context options harness)
+                                               command-args)
+             (= command "seq") (handle-seq (make-context options harness)
+                                           command-args)
+             (= command "llm-wiki")
+               (handle-llm-wiki options harness command-args)
+             (= command "completions") (handle-completions command-args)
+             :else {:exit (exit-codes :usage),
+                    :out (str "Unknown command: " command "\n\n" help-text)})
+       (catch clojure.lang.ExceptionInfo e
+         {:exit (exit-codes (or (:type (ex-data e)) :failure)),
+          :out (str (ex-message e)
+                    (when-let [silos (seq (:silos (ex-data e)))]
+                      (str "\nConfigured silos: "
+                           (str/join ", " (map name silos)))))})))))
 
 (defn -main
   [& args]

@@ -44,6 +44,34 @@
         (is (zero? exit))
         (is (str/includes? out "Usage: denote"))))))
 
+(deftest per-command-help
+  (testing "every command answers --help with its usage and exit 0"
+    (doseq [command ["find" "grep" "backlinks" "links" "rename" "new" "seq"
+                     "llm-wiki" "silo" "completions"]]
+      (let [{:keys [exit out]} (run-cli command "--help")]
+        (is (zero? exit) command)
+        (is (str/includes? out (str "Usage: denote " command)) command))))
+  (testing "-h works too"
+    (let [{:keys [exit out]} (run-cli "new" "-h")]
+      (is (zero? exit))
+      (is (str/includes? out "Usage: denote new"))))
+  (testing "the command's own options are listed"
+    (is (str/includes? (:out (run-cli "find" "--help")) "--match"))
+    (is (str/includes? (:out (run-cli "rename" "--help")) "--break-links"))
+    (is (str/includes? (:out (run-cli "llm-wiki" "--help")) "--deep")))
+  (testing "subcommand groups list their subcommands"
+    (let [{:keys [out]} (run-cli "seq" "--help")]
+      (is (str/includes? out "reparent")))
+    (let [{:keys [out]} (run-cli "silo" "--help")]
+      (is (str/includes? out "doctor"))))
+  (testing "--help anywhere in the command args wins"
+    (let [{:keys [exit out]} (run-cli "find" "alpha" "--help")]
+      (is (zero? exit))
+      (is (str/includes? out "Usage: denote find"))
+      (is (not (str/includes? out "alpha")))))
+  (testing "unknown commands still fail even with --help"
+    (is (= 2 (:exit (run-cli "frobnicate" "--help"))))))
+
 (deftest run-unknown-command
   (testing "unknown command exits with usage code 2"
     (let [{:keys [exit out]} (run-cli "frobnicate")]
