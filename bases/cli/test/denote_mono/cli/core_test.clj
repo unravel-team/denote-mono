@@ -59,36 +59,35 @@
         ;; reports the dev placeholder; built jars embed vX.Y.Z.
         (is (re-matches #"denote (dev|v\d+\.\d+\.\d+)" out))))))
 
-(deftest list-command
-  (testing "default silo listing, relative paths, sorted by identifier"
-    (let [{:keys [exit out]} (run-cli "list")]
-      (is (zero? exit))
-      (is (= ["20240101T000000--alpha__clojure.org"
-              "20240102T000000--beta__notes.org"]
-             (str/split-lines out)))))
-  (testing "--silo selects another silo"
-    (let [{:keys [out]} (run-cli "--silo" "work" "list")]
-      (is (= ["20240301T000000--work-note__job.org"] (str/split-lines out)))))
-  (testing "keyword filter"
-    (let [{:keys [out]} (run-cli "list" "--keyword" "clojure")]
-      (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
-  (testing "--json emits parseable note records"
-    (let [{:keys [out]} (run-cli "list" "--json" "--id" "20240101T000000")
-          parsed (json/read-str out :key-fn keyword)]
-      (is (= "alpha" (get-in parsed [:filename :title])))
-      (is (= "notes" (:silo parsed)))))
-  (testing "unknown silo errors with configured list"
-    (let [{:keys [exit out]} (run-cli "--silo" "nope" "list")]
-      (is (= 3 exit))
-      (is (str/includes? out "notes")))))
-
 (deftest find-command
   (testing "find with query prints matching paths"
     (let [{:keys [exit out]} (run-cli "find" "alpha")]
       (is (zero? exit))
       (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
   (testing "find without matches exits 6"
-    (is (= 6 (:exit (run-cli "find" "zzz"))))))
+    (is (= 6 (:exit (run-cli "find" "zzz")))))
+  (testing "find without query lists the silo, sorted by identifier"
+    (let [{:keys [exit out]} (run-cli "find")]
+      (is (zero? exit))
+      (is (= ["20240101T000000--alpha__clojure.org"
+              "20240102T000000--beta__notes.org"]
+             (str/split-lines out)))))
+  (testing "--silo selects another silo"
+    (let [{:keys [out]} (run-cli "--silo" "work" "find")]
+      (is (= ["20240301T000000--work-note__job.org"] (str/split-lines out)))))
+  (testing "keyword filter"
+    (let [{:keys [out]} (run-cli "find" "--keyword" "clojure")]
+      (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
+  (testing "--json emits parseable note records"
+    (let [{:keys [out]} (run-cli "find" "--json" "--id" "20240101T000000")
+          parsed (json/read-str out :key-fn keyword)]
+      (is (= "alpha" (get-in parsed [:filename :title])))
+      (is (= "notes" (:silo parsed)))))
+  (testing "unknown silo errors with configured list"
+    (let [{:keys [exit out]} (run-cli "--silo" "nope" "find")]
+      (is (= 3 exit))
+      (is (str/includes? out "notes"))))
+  (testing "list is no longer a command" (is (= 2 (:exit (run-cli "list"))))))
 
 (deftest open-command
   (testing "open runs the editor (EDITOR=true) and succeeds"

@@ -39,10 +39,9 @@ Global options:
   --version        Print version and exit
 
 Commands:
-  list             List notes (filters: --match --keyword --signature
-                   --title --id; output: --sort --json --edn --print0)
-  find [QUERY]     Filter notes by query; prints paths (--open opens them,
-                   --fzf selects interactively)
+  find [QUERY]     Find notes (filters: --match --keyword --signature
+                   --title --id; output: --sort --json --edn --print0;
+                   --open opens them, --fzf selects interactively)
   open [QUERY]     Open matching note in $EDITOR (fzf narrows on a TTY)
   grep QUERY       Search note contents (rg-accelerated when available)
   backlinks ID|F   Notes linking to the given note
@@ -83,7 +82,7 @@ Commands:
                    str/trim)
            "dev")))
 
-(def ^:private list-options
+(def ^:private find-options
   [[nil "--match REGEX" "Filter by basename regex"]
    [nil "--keyword KW" "Filter by keyword"]
    [nil "--signature SIG" "Filter by exact signature"]
@@ -91,10 +90,8 @@ Commands:
    [nil "--id ID" "Filter by identifier"]
    [nil "--sort KEY" "Sort key" :default "identifier"]
    [nil "--json" "JSON-lines output"] [nil "--edn" "EDN output"]
-   [nil "--print0" "NUL-delimited output"]])
-
-(def ^:private find-options
-  [[nil "--open" "Open the selection in the editor"]
+   [nil "--print0" "NUL-delimited output"]
+   [nil "--open" "Open the selection in the editor"]
    [nil "--fzf" "Select interactively with fzf"]])
 
 (def ^:private rename-options
@@ -148,17 +145,6 @@ Commands:
         print0 (str/join "\u0000" (map :relative-path notes))
         :else (str/join "\n" (map :relative-path notes))))
 
-(defn- handle-list
-  [context args]
-  (let [{:keys [options errors]} (tools-cli/parse-opts args list-options)]
-    (if errors
-      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (let [filters (select-keys options
-                                 [:match :keyword :signature :title :id])
-            notes (-> (search/list-notes context filters {})
-                      (search/sort-notes (keyword (:sort options)) {}))]
-        {:exit (exit-codes :success), :out (render-notes notes options)}))))
-
 (defn- interactive-tty?
   "True when this process is attached to a terminal the user can interact
   with (fzf needs one)."
@@ -177,12 +163,14 @@ Commands:
       notes)))
 
 (defn- find-notes
-  "Shared body for find/open: query, narrow with fzf when requested (or on
-  an interactive terminal), then print or launch the editor."
-  [context query {:keys [open? fzf?]}]
-  (let [notes (search/sort-notes (search/list-notes context {:query query} {})
-                                 :identifier
-                                 {})
+  "Shared body for find/open: filter, sort, narrow with fzf when requested
+  (or on an interactive terminal), then print or launch the editor."
+  [context options query {:keys [open? fzf?]}]
+  (let [filters (assoc (select-keys options
+                                    [:match :keyword :signature :title :id])
+                  :query query)
+        notes (-> (search/list-notes context filters {})
+                  (search/sort-notes (keyword (:sort options)) {}))
         notes (if (and (seq notes) (or fzf? (and open? (interactive-tty?))))
                 (fzf-select context notes)
                 notes)]
@@ -194,8 +182,7 @@ Commands:
                                                 :inherit-io? true))]
               {:exit (if (zero? exit) (exit-codes :success) (exit-codes :tool)),
                :out ""})
-      :else {:exit (exit-codes :success),
-             :out (str/join "\n" (map :relative-path notes))})))
+      :else {:exit (exit-codes :success), :out (render-notes notes options)})))
 
 (defn- handle-find
   [context args]
@@ -204,6 +191,7 @@ Commands:
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
       (find-notes context
+                  options
                   (first arguments)
                   {:open? (:open options), :fzf? (:fzf options)}))))
 
@@ -214,6 +202,7 @@ Commands:
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
       (find-notes context
+                  options
                   (first arguments)
                   {:open? true, :fzf? (:fzf options)}))))
 
@@ -453,8 +442,7 @@ Commands:
 
 (def ^:private command-spec
   "Command surface used for dispatch documentation and completion scripts."
-  [{:name "list", :description "List notes", :options list-options}
-   {:name "find", :description "Filter notes by query", :options find-options}
+  [{:name "find", :description "Find notes", :options find-options}
    {:name "open",
     :description "Open matching notes in the editor",
     :options find-options}
@@ -671,8 +659,6 @@ Commands:
              (or (nil? command) (:help options) (= "help" command))
                {:exit (exit-codes :success), :out help-text}
              (= command "silo") (handle-silo options harness command-args)
-             (= command "list") (handle-list (make-context options harness)
-                                             command-args)
              (= command "find") (handle-find (make-context options harness)
                                              command-args)
              (= command "open") (handle-open (make-context options harness)
