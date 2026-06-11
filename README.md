@@ -95,9 +95,9 @@ default, and (optionally) tune the `:llm` provider map:
          :work {:path "~/work/notes"}
          :wiki {:path "~/Documents/llm-wiki" :llm-wiki true}}
  ;; optional; these are the defaults
- :llm {:provider :anthropic
-       :model "claude-opus-4-8"
-       :api-key-env "ANTHROPIC_API_KEY"
+ :llm {:provider :openrouter
+       :model "moonshotai/kimi-k2.6"
+       :api-key-env "OPENROUTER_API_KEY"
        :api-base nil
        :max-rounds 20
        :timeout-ms 300000}}

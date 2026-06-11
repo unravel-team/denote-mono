@@ -13,9 +13,9 @@
     (is (= :numeric (get-in defaults [:sequence :scheme])))
     (is (= {} (:silos defaults)))
     (is (nil? (:default-llm-wiki-silo defaults)))
-    (is (= {:provider :anthropic,
-            :model "claude-opus-4-8",
-            :api-key-env "ANTHROPIC_API_KEY",
+    (is (= {:provider :openrouter,
+            :model "moonshotai/kimi-k2.6",
+            :api-key-env "OPENROUTER_API_KEY",
             :api-base nil,
             :max-rounds 20,
             :timeout-ms 300000}
