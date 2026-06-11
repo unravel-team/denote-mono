@@ -120,9 +120,10 @@ directories ("silos"):
 
 Everything else has sensible defaults. The full set of options (filename
 component order, keyword sorting, file type, exclusion regexes, front-matter
-behavior, sequence scheme, external tool argv vectors) is documented in
-spec section 5.1. Any command also accepts `--config PATH`, `--silo NAME`,
-and `--root PATH` to override resolution.
+behavior, sequence scheme, external tool argv vectors) lives in the `config`
+component — see `components/config` for the defaults. Any command also
+accepts `--config PATH`, `--silo NAME`, and `--root PATH` to override
+resolution.
 
 Silo selection order: `--silo`, then `--root`, then the silo containing the
 current directory, then `:default-silo`.

@@ -32,7 +32,12 @@
 
 (defn inside-root?
   "True when PATH resolves inside ROOT after canonicalization.
-  [ref:silo_path_containment]"
+
+  [tag:silo_path_containment] Roots, sources, and destinations are
+  resolved to canonical/real paths before search or mutation, and any
+  target outside the selected silo root is rejected. Symlinked entries
+  must point back inside the root. The same containment applies before
+  collision checks."
   [root path]
   (let [root-path (to-path (canonical root))
         target (to-path (canonical path))]
