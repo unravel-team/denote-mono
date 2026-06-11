@@ -29,9 +29,12 @@ Required only for `make check` (linting and formatting gates):
 
 Optional at runtime (the CLI degrades gracefully without them):
 
-- `fzf` — interactive selection for `find --fzf` and `open`
+- `fzf` — **strongly recommended** (`brew install fzf`). When installed,
+  `find` and `grep` become interactive on a terminal: fzf narrows the
+  results, **Enter opens the selection in your editor, Ctrl-P prints it**
+  for piping. Without fzf (or when output is piped) they print plainly.
 - `rg` (ripgrep) — accelerates `denote grep`
-- `$VISUAL` / `$EDITOR` — used by `denote open` (falls back to `vi`)
+- `$VISUAL` / `$EDITOR` — the editor used to open notes (falls back to `vi`)
 
 ## Install
 
@@ -39,7 +42,7 @@ Optional at runtime (the CLI degrades gracefully without them):
 git clone <this-repo>
 cd denote-mono
 
-make test    # run the full test suite (116 tests)
+make test    # run the full test suite
 make build   # runs checks, then builds the uberjar
 ```
 
@@ -139,13 +142,14 @@ alias d='denote --config /tmp/denote-demo/config.edn'
 d new --title "My first note" --keyword demo --keyword clojure
 d new --title "Second note" --keyword demo --type markdown-yaml
 
-# list and filter
-d list
-d list --keyword clojure
-d list --json | head -1
-
-# search file names and contents
+# find and filter; on a terminal with fzf installed this is interactive
+# (Enter opens the selection in $EDITOR, Ctrl-P prints it)
+d find
 d find first
+d find --keyword clojure
+d find --json | head -1
+
+# search note contents (same interactive selection on a terminal)
 d grep "title"
 
 # build a Folgezettel hierarchy
@@ -161,8 +165,9 @@ d seq tree
 d rename /tmp/denote-demo/notes/<file>.org --title "Renamed" --dry-run
 d rename /tmp/denote-demo/notes/<file>.org --title "Renamed"
 
-# batch operations require --yes after showing the plan
-d rename-many --add-keyword reviewed --yes /tmp/denote-demo/notes/*.org
+# rename works on any file, silo or not: it denote-ifies it in place
+echo hi > /tmp/scratch.txt
+d rename /tmp/scratch.txt --title "Scratch"   # => /tmp/<ID>--scratch.txt
 
 # links between notes (org: [[denote:ID][text]], md: [text](denote:ID))
 d links <FILE_OR_ID>
@@ -179,26 +184,23 @@ d silo doctor
 denote [--silo NAME] [--root PATH] [--config PATH] COMMAND [OPTIONS]
 denote --version | version    Print the tool version
 
-list             List notes (--match --keyword --signature --title --id;
+find [QUERY]     Find notes (--match --keyword --signature --title --id;
                  --sort identifier|title|keywords|signature|modified|random;
-                 output: --json --edn --print0)
-find [QUERY]     Substring-filter notes; --open opens, --fzf selects
-open [QUERY]     Open matches in $EDITOR (fzf narrows when on a terminal)
-grep QUERY       Regex search of note contents (rg when available)
+                 output: --json --edn --print0). On a terminal fzf selects
+                 interactively: Enter opens in $EDITOR, Ctrl-P prints
+grep QUERY       Regex search of note contents (rg when available); same
+                 interactive selection on a terminal
 backlinks ID|F   Notes linking to the given note
 links FILE_OR_ID Outgoing denote: links of a note
 new              Create a note (--title --keyword... --signature --id
                  --date --type --subdir --dry-run --reuse-empty)
-rename FILE      Change name components (--title --keyword --signature
-                 --id --date; empty string removes a component;
+rename FILE      Rename any file into Denote form (--title --keyword
+                 --signature --id --date; empty string removes a component;
                  --front-matter sync|update-existing|add|none;
                  --break-links overrides the backlink guard; --dry-run)
-rename-many F... Batch rename (--add-keyword --remove-keyword
-                 --replace-keywords A,B --from-front-matter; --yes to apply)
-seq validate SEQ [--scheme numeric|alphanumeric|alphanumeric-delimited]
 seq next parent|child SEQ|sibling SEQ
 seq new parent|child SEQ|sibling SEQ [new options]
-seq list|tree [--prefix SEQ] [--depth N]
+seq list|tree [SEQ] [--depth N]
 seq convert FILE... --to SCHEME [--dry-run --yes]
 seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
 seq as-parent FILE
@@ -212,8 +214,9 @@ Exit codes: `0` success, `1` failure, `2` usage, `3` validation,
 Safety defaults: every mutation supports `--dry-run`; batch mutations print
 their plan and require `--yes`; destination collisions are detected before
 anything moves; renaming a note's identifier refuses to break existing
-backlinks unless `--break-links` is passed; all paths are canonicalized and
-must stay inside the selected silo.
+backlinks unless `--break-links` is passed (the guard applies inside a
+configured silo — elsewhere `rename` is a plain file operation); paths
+resolved through a silo are canonicalized and must stay inside it.
 
 ## Development
 
