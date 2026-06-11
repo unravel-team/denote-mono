@@ -3,6 +3,7 @@
         denote-mono/editor {:local/root "../../components/editor"}
         denote-mono/filename {:local/root "../../components/filename"}
         denote-mono/filesystem {:local/root "../../components/filesystem"}
+        denote-mono/llm-wiki {:local/root "../../components/llm_wiki"}
         denote-mono/note {:local/root "../../components/note"}
         denote-mono/process {:local/root "../../components/process"}
         denote-mono/rename {:local/root "../../components/rename"}

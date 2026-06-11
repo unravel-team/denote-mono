@@ -10,6 +10,7 @@
             [denote-mono.config.interface :as config]
             [denote-mono.editor.interface :as editor]
             [denote-mono.filename.interface :as filename]
+            [denote-mono.llm-wiki.interface :as llm-wiki]
             [denote-mono.note.interface :as note]
             [denote-mono.process.interface :as process]
             [denote-mono.rename.interface :as rename]
@@ -59,6 +60,9 @@ Commands:
   seq convert FILE... --to SCHEME [--dry-run --yes]
   seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
   seq as-parent FILE [--dry-run]
+  llm-wiki ingest FILE     Distill a source file into the LLM wiki
+  llm-wiki query QUESTION  Answer a question from the LLM wiki (--save)
+  llm-wiki lint            Check LLM wiki health (--fix --deep)
   silo list        List configured silos
   silo path [NAME] Print the path of a silo
   silo doctor      Check that configured silos exist
@@ -458,6 +462,13 @@ Commands:
         [nil "--recursive" "Also reparent descendants"]
         [nil "--yes" "Apply without confirmation"]))
 
+(def ^:private llm-wiki-options
+  [[nil "--save" "File the answer back as a wiki note (query)"]
+   [nil "--deep" "Add an LLM review pass (lint)"]
+   [nil "--fix" "Repair what can be repaired (lint)"]
+   [nil "--model MODEL" "Override the configured LLM model"]
+   [nil "--max-rounds N" "Cap agentic tool rounds" :parse-fn parse-long]])
+
 (def ^:private command-spec
   "Command surface used for dispatch documentation and completion scripts."
   [{:name "find", :description "Find notes", :options find-options}
@@ -468,6 +479,10 @@ Commands:
    {:name "links", :description "Outgoing links of a note", :options []}
    {:name "rename", :description "Rename one file", :options rename-options}
    {:name "new", :description "Create a note", :options new-options}
+   {:name "llm-wiki",
+    :description "LLM-maintained wiki operations",
+    :options llm-wiki-options,
+    :subcommands ["ingest" "lint" "query"]}
    {:name "seq",
     :description "Folgezettel sequence operations",
     :options seq-options,
@@ -612,6 +627,87 @@ Commands:
         {:exit (exit-codes :usage),
          :out (str "Unknown seq subcommand: " subcommand)}))))
 
+(defn- make-llm-wiki-context
+  "Like make-context but resolved against llm-wiki silos only; carries the
+  harness's :llm-complete so tests can script the LLM."
+  [global-opts {:keys [env cwd tty? llm-complete]}]
+  (let [cfg (load-validated-config global-opts env)]
+    {:config cfg,
+     :silo (silo/resolve-llm-wiki-silo cfg
+                                       (select-keys global-opts [:silo :root])
+                                       cwd
+                                       env),
+     :env env,
+     :cwd cwd,
+     :tty? tty?,
+     :llm-complete llm-complete}))
+
+(defn- handle-llm-wiki-lint
+  [context options]
+  (let [{:keys [problems fixed]} (llm-wiki/lint context {:fix? (:fix options)})
+        fixable #{:stale-index :missing-scaffold}
+        remaining
+          (if (:fix options) (remove (comp fixable :check) problems) problems)
+        deep-report (when (:deep options)
+                      (:report (llm-wiki/deep-lint
+                                 context
+                                 (select-keys options [:model :max-rounds]))))
+        lines (concat
+                (map #(str "Fixed: " %) fixed)
+                (map #(str (name (:check %)) ": " (:path %) " — " (:detail %))
+                  remaining)
+                (when deep-report [deep-report]))]
+    (if (seq remaining)
+      {:exit (exit-codes :validation), :out (str/join "\n" lines)}
+      {:exit (exit-codes :success),
+       :out (str/join "\n" (concat lines ["Wiki OK"]))})))
+
+(defn- handle-llm-wiki
+  [global-opts harness args]
+  (let [{:keys [options arguments errors]}
+          (tools-cli/parse-opts args llm-wiki-options)
+        [subcommand & rest-args] arguments
+        llm-opts (select-keys options [:model :max-rounds])]
+    (if errors
+      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (let [context (make-llm-wiki-context global-opts harness)]
+        (case subcommand
+          "ingest" (if-let [source (first rest-args)]
+                     (let [{:keys [created updated final-text rounds stopped]}
+                             (llm-wiki/ingest context source llm-opts)]
+                       (if (= stopped :max-rounds)
+                         {:exit (exit-codes :tool),
+                          :out (str "LLM stopped after "
+                                    rounds
+                                    " rounds without finishing")}
+                         {:exit (exit-codes :success),
+                          :out (str/join "\n"
+                                         (concat
+                                           (map #(str "Created: " %) created)
+                                           (map #(str "Updated: " %) updated)
+                                           (when-not (str/blank? final-text)
+                                             [final-text])))}))
+                     {:exit (exit-codes :usage),
+                      :out "Usage: denote llm-wiki ingest FILE"})
+          "query"
+            (if-let [question (first rest-args)]
+              (let [{:keys [answer saved-path stopped]}
+                      (llm-wiki/query context
+                                      question
+                                      (assoc llm-opts :save? (:save options)))]
+                (if (= stopped :max-rounds)
+                  {:exit (exit-codes :tool),
+                   :out "LLM stopped without an answer"}
+                  {:exit (exit-codes :success),
+                   :out (str answer
+                             (when saved-path (str "\nSaved: " saved-path)))}))
+              {:exit (exit-codes :usage),
+               :out "Usage: denote llm-wiki query QUESTION"})
+          "lint" (handle-llm-wiki-lint context options)
+          {:exit (exit-codes :usage),
+           :out
+           "Usage: denote llm-wiki ingest FILE | query QUESTION | lint"})))))
+
 (defn- handle-silo
   [global-opts {:keys [env]} args]
   (let [cfg (load-validated-config global-opts env)
@@ -678,6 +774,8 @@ Commands:
                                                   command-args)
                 (= command "seq") (handle-seq (make-context options harness)
                                               command-args)
+                (= command "llm-wiki")
+                  (handle-llm-wiki options harness command-args)
                 (= command "completions") (handle-completions command-args)
                 :else {:exit (exit-codes :usage),
                        :out (str "Unknown command: " command "\n\n" help-text)})
