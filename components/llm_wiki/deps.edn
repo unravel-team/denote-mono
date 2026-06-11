@@ -1,0 +1,10 @@
+{:paths ["src"]
+ :deps {denote-mono/config {:local/root "../config"}
+        denote-mono/file-type {:local/root "../file_type"}
+        denote-mono/filename {:local/root "../filename"}
+        denote-mono/filesystem {:local/root "../filesystem"}
+        denote-mono/front-matter {:local/root "../front_matter"}
+        denote-mono/llm {:local/root "../llm"}
+        denote-mono/note {:local/root "../note"}
+        denote-mono/search {:local/root "../search"}
+        denote-mono/sequence {:local/root "../sequence"}}}

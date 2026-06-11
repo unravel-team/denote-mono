@@ -11,6 +11,7 @@
     denote-mono/filesystem {:local/root "components/filesystem"}
     denote-mono/front-matter {:local/root "components/front_matter"}
     denote-mono/llm {:local/root "components/llm"}
+    denote-mono/llm-wiki {:local/root "components/llm_wiki"}
     denote-mono/note {:local/root "components/note"}
     denote-mono/process {:local/root "components/process"}
     denote-mono/rename {:local/root "components/rename"}
@@ -34,6 +35,7 @@
                  "components/filesystem/test"
                  "components/front_matter/test"
                  "components/llm/test"
+                 "components/llm_wiki/test"
                  "components/note/test"
                  "components/process/test"
                  "components/rename/test"
@@ -51,6 +53,7 @@
                "-d" "components/filesystem/test"
                "-d" "components/front_matter/test"
                "-d" "components/llm/test"
+               "-d" "components/llm_wiki/test"
                "-d" "components/note/test"
                "-d" "components/process/test"
                "-d" "components/rename/test"
