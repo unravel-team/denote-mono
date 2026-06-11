@@ -11,4 +11,4 @@
 * [Generate shell completions from the live command tables](0009-generate-shell-completions-from-the-live-command-tables.md)
 * [Distribute as a GraalVM native image with build-time Clojure initialization](0010-distribute-as-a-graalvm-native-image-with-build-time-clojure-initialization.md)
 * [Compute the version at build time and embed it as a resource](0011-compute-the-version-at-build-time-and-embed-it-as-a-resource.md)
-
+* [Run the llm-wiki agent in-process with deterministic tools](0012-run-the-llm-wiki-agent-in-process-with-deterministic-tools.md)

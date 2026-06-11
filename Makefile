@@ -67,6 +67,8 @@ native: build ## Build a native binary with GraalVM native-image
 	$(NATIVE_IMAGE) -jar $$(ls -t projects/denote-cli/target/denote-cli-*-standalone.jar | head -1) \
 	  -o projects/denote-cli/target/denote \
 	  --features=clj_easy.graal_build_time.InitClojureClasses \
+	  --initialize-at-build-time=com.fasterxml.jackson \
+	  --enable-url-protocols=http,https \
 	  --no-fallback
 	@echo "Native binary: projects/denote-cli/target/denote"
 

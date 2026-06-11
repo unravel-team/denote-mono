@@ -118,6 +118,23 @@ directories ("silos"):
          :work {:path "~/work/notes"}}}
 ```
 
+To use `denote llm-wiki` (see below), flag one or more silos as LLM wikis
+and pick a default. The LLM provider/model is configured under `:llm`
+(defaults: Anthropic, with the API key read from `ANTHROPIC_API_KEY`):
+
+```clojure
+{:default-silo :notes
+ :default-llm-wiki-silo :wiki
+ :silos {:notes {:path "~/Documents/notes"}
+         :wiki {:path "~/Documents/llm-wiki" :llm-wiki true}}
+ ;; optional; these are the defaults
+ :llm {:provider :anthropic
+       :model "claude-opus-4-8"
+       :api-key-env "ANTHROPIC_API_KEY"
+       :api-base nil
+       :max-rounds 20}}
+```
+
 Everything else has sensible defaults. The full set of options (filename
 component order, keyword sorting, file type, exclusion regexes, front-matter
 behavior, sequence scheme, external tool argv vectors) lives in the `config`
@@ -179,6 +196,44 @@ d silo list
 d silo doctor
 ```
 
+## LLM wiki
+
+`denote llm-wiki` implements [Karpathy's LLM-wiki
+pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):
+an LLM incrementally maintains a wiki of interlinked Denote notes
+distilled from your raw sources. Your sources stay immutable; the wiki
+silo compounds. Each wiki note is a real Denote file with a Folgezettel
+sequence, keywords, dense `denote:` cross-links, and a `## Sources`
+section linking back to the raw files it came from. The silo also carries
+three machine-maintained files: `index.md` (a generated catalog — never
+edit it), `log.md` (append-only history of every operation), and
+`wiki-schema.md` (the conventions document fed to the model).
+
+```sh
+export ANTHROPIC_API_KEY=...   # or configure :llm in config.edn
+
+# index any file into the default llm-wiki silo; the source is never touched
+denote llm-wiki ingest ~/notes/handwritten-scan-transcript.txt
+
+# ask questions; --save files good answers back as wiki notes
+denote llm-wiki query "How does X relate to Y?"
+denote llm-wiki query "How does X relate to Y?" --save
+
+# deterministic health checks (broken links, missing source links,
+# orphans, bad sequences, stale index); --fix repairs the fixable,
+# --deep adds an advisory LLM audit
+denote llm-wiki lint
+denote llm-wiki lint --fix
+denote llm-wiki lint --deep
+```
+
+All three subcommands honor the global `--silo NAME` for choosing among
+several llm-wiki silos, plus `--model` and `--max-rounds` overrides. The
+model works through a constrained tool loop: it can list, read, search,
+create, and update wiki notes, but filenames, identifiers, and sequence
+numbers are always assigned by denote itself, and `index.md`/`log.md` are
+off-limits to it (ADR 12).
+
 ## Command reference
 
 ```text
@@ -205,6 +260,9 @@ seq list|tree [SEQ] [--depth N]
 seq convert FILE... --to SCHEME [--dry-run --yes]
 seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
 seq as-parent FILE
+llm-wiki ingest FILE      Distill a source into the LLM wiki silo
+llm-wiki query QUESTION   Answer from the wiki (--save files it back)
+llm-wiki lint             Wiki health checks (--fix --deep)
 silo list|path [NAME]|doctor
 completions bash|zsh|fish
 ```
@@ -242,7 +300,8 @@ Workspace layout:
 - `components/` — one directory per component, each with `deps.edn`,
   `src/denote_mono/<name>/{interface,core}.clj`, and `test/`. Components:
   `slug`, `filename`, `file_type`, `front_matter`, `filesystem`, `process`,
-  `config`, `silo`, `editor`, `search`, `rename`, `note`, `sequence`.
+  `config`, `silo`, `editor`, `search`, `rename`, `note`, `sequence`,
+  `llm` (litellm-clj wrapper + tool loop), `llm_wiki`.
   Cross-component calls go through `interface` namespaces only.
 - `bases/cli` — argument parsing and rendering; all domain logic lives in
   components.
