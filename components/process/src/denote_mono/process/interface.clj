@@ -5,5 +5,3 @@
 (defn available? [executable] (core/available? executable))
 
 (defn run ([argv] (run argv {})) ([argv opts] (core/run argv opts)))
-
-(defn select [candidates argv] (core/select candidates argv))

@@ -89,31 +89,103 @@
       (is (str/includes? out "notes"))))
   (testing "list is no longer a command" (is (= 2 (:exit (run-cli "list"))))))
 
-(deftest open-command
-  (testing "open runs the editor (EDITOR=true) and succeeds"
-    (is (zero? (:exit (run-cli "open" "alpha"))))))
+(defn- fake-fzf!
+  "Write an executable selector whose name contains \"fzf\" so the CLI
+  treats it as the real thing (and passes --expect). It emulates fzf's
+  --expect output: a line naming the pressed key (empty = Enter), then
+  the selection (the first input line)."
+  [dir key]
+  (let [path (str dir "/fake-fzf-" (if (str/blank? key) "enter" key))]
+    (spit path
+          (str "#!/bin/sh\nIFS= read -r first\nprintf '"
+               key
+               "\\n%s\\n' \"$first\"\n"))
+    (.setExecutable (java.io.File. path) true)
+    path))
 
-(deftest find-fzf-command
-  ;; head -1 stands in for fzf: it "selects" the first candidate line.
-  (let [fzf-config (str (temp-dir "denote-cli-fzf") "/config.edn")
-        base (read-string (slurp *config-path*))]
-    (spit fzf-config (pr-str (assoc base :tools {:fzf ["head" "-1"]})))
-    (testing "--fzf narrows to the selector's choice"
-      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "find" "--fzf"]
-                                        *harness*)]
+(deftest find-selection-command
+  (let [tools-dir (temp-dir "denote-cli-tools")
+        fzf-config (str tools-dir "/config.edn")
+        base (read-string (slurp *config-path*))
+        tty-harness (assoc *harness* :tty? true)
+        run-tty (fn [& args]
+                  (cli/run (into ["--config" fzf-config] args) tty-harness))]
+    (testing "Enter opens the selection in the editor (no output)"
+      (spit fzf-config
+            (pr-str (assoc base :tools {:fzf [(fake-fzf! tools-dir "")]})))
+      (let [{:keys [exit out]} (run-tty "find")]
+        (is (zero? exit))
+        (is (str/blank? out))))
+    (testing "Ctrl-P prints the selection instead"
+      (spit fzf-config
+            (pr-str (assoc base
+                      :tools {:fzf [(fake-fzf! tools-dir "ctrl-p")]})))
+      (let [{:keys [exit out]} (run-tty "find")]
         (is (zero? exit))
         (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
+    (testing "a non-fzf selector defaults to opening the selection"
+      (spit fzf-config (pr-str (assoc base :tools {:fzf ["head" "-1"]})))
+      (let [{:keys [exit out]} (run-tty "find")]
+        (is (zero? exit))
+        (is (str/blank? out))))
     (testing "a cancelling selector exits with no-match"
       (spit fzf-config (pr-str (assoc base :tools {:fzf ["false"]})))
-      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "find" "--fzf"]
-                                        *harness*)]
+      (let [{:keys [exit out]} (run-tty "find")]
         (is (= 6 exit))
         (is (str/includes? out "cancelled"))))
-    (testing "missing selector falls back to all matches"
+    (testing "missing selector falls back to printing all matches"
       (spit fzf-config
             (pr-str (assoc base
                       :tools {:fzf ["definitely-not-a-real-tool-xyz"]})))
-      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "find" "--fzf"]
+      (let [{:keys [exit out]} (run-tty "find")]
+        (is (zero? exit))
+        (is (= 2 (count (str/split-lines out))))))
+    (testing "no TTY means plain output even with a selector configured"
+      (spit fzf-config
+            (pr-str (assoc base
+                      :tools {:fzf [(fake-fzf! tools-dir "ctrl-p")]})))
+      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "find"]
+                                        *harness*)]
+        (is (zero? exit))
+        (is (= 2 (count (str/split-lines out))))))
+    (testing "scripted output formats skip the selector on a TTY"
+      (let [{:keys [out]} (run-tty "find" "--json" "--id" "20240101T000000")]
+        (is (= "alpha"
+               (get-in (json/read-str out :key-fn keyword)
+                       [:filename :title])))))
+    (testing "open is no longer a command"
+      (is (= 2 (:exit (run-cli "open" "alpha")))))))
+
+(deftest grep-selection-command
+  (spit (str *notes-root* "/20240101T000000--alpha__clojure.org")
+        "first NEEDLE\n")
+  (spit (str *notes-root* "/20240102T000000--beta__notes.org")
+        "second NEEDLE\n")
+  (let [tools-dir (temp-dir "denote-cli-grep-tools")
+        fzf-config (str tools-dir "/config.edn")
+        base (read-string (slurp *config-path*))
+        tty-harness (assoc *harness* :tty? true)
+        run-tty (fn [& args]
+                  (cli/run (into ["--config" fzf-config] args) tty-harness))]
+    (testing "Ctrl-P prints the selected match line"
+      (spit fzf-config
+            (pr-str (assoc base
+                      :tools {:fzf [(fake-fzf! tools-dir "ctrl-p")]})))
+      ;; match order follows the directory walk, so only the shape of the
+      ;; single selected line is stable
+      (let [{:keys [exit out]} (run-tty "grep" "NEEDLE")]
+        (is (zero? exit))
+        (is (= 1 (count (str/split-lines out))))
+        (is (re-matches #"2024010[12]T000000--\S+\.org:1:(first|second) NEEDLE"
+                        out))))
+    (testing "Enter opens the selected match's file"
+      (spit fzf-config
+            (pr-str (assoc base :tools {:fzf [(fake-fzf! tools-dir "")]})))
+      (let [{:keys [exit out]} (run-tty "grep" "NEEDLE")]
+        (is (zero? exit))
+        (is (str/blank? out))))
+    (testing "no TTY prints all match lines"
+      (let [{:keys [exit out]} (cli/run ["--config" fzf-config "grep" "NEEDLE"]
                                         *harness*)]
         (is (zero? exit))
         (is (= 2 (count (str/split-lines out))))))))

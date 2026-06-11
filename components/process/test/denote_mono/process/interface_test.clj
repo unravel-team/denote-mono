@@ -25,13 +25,3 @@
   (testing "working directory option"
     (let [{:keys [out]} (process/run ["pwd"] {:dir "/tmp"})]
       (is (str/includes? out "tmp")))))
-
-(deftest select-test
-  (testing "selector output becomes the selection (head -1 picks the first)"
-    (is (= ["alpha"] (process/select ["alpha" "beta" "gamma"] ["head" "-1"]))))
-  (testing "a pass-through selector returns everything"
-    (is (= ["alpha" "beta"] (process/select ["alpha" "beta"] ["cat"]))))
-  (testing "non-zero exit (cancelled selection) returns nil"
-    (is (nil? (process/select ["alpha"] ["false"]))))
-  (testing "missing selector returns nil"
-    (is (nil? (process/select ["alpha"] ["definitely-not-a-real-tool-xyz"])))))

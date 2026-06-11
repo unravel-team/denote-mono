@@ -40,10 +40,11 @@ Global options:
 
 Commands:
   find [QUERY]     Find notes (filters: --match --keyword --signature
-                   --title --id; output: --sort --json --edn --print0;
-                   --open opens them, --fzf selects interactively)
-  open [QUERY]     Open matching note in $EDITOR (fzf narrows on a TTY)
-  grep QUERY       Search note contents (rg-accelerated when available)
+                   --title --id; output: --sort --json --edn --print0).
+                   On a terminal fzf selects interactively: Enter opens
+                   the selection in $EDITOR, Ctrl-P prints it instead
+  grep QUERY       Search note contents (rg-accelerated when available).
+                   On a terminal fzf selects: Enter opens, Ctrl-P prints
   backlinks ID|F   Notes linking to the given note
   links FILE_OR_ID Outgoing denote: links of a note
   rename FILE      Rename one note (--title --keyword --signature --id
@@ -90,9 +91,7 @@ Commands:
    [nil "--id ID" "Filter by identifier"]
    [nil "--sort KEY" "Sort key" :default "identifier"]
    [nil "--json" "JSON-lines output"] [nil "--edn" "EDN output"]
-   [nil "--print0" "NUL-delimited output"]
-   [nil "--open" "Open the selection in the editor"]
-   [nil "--fzf" "Select interactively with fzf"]])
+   [nil "--print0" "NUL-delimited output"]])
 
 (def ^:private rename-options
   [[nil "--title TITLE" "New title; empty string removes"]
@@ -130,13 +129,14 @@ Commands:
       config/validate))
 
 (defn- make-context
-  [global-opts {:keys [env cwd]}]
+  [global-opts {:keys [env cwd tty?]}]
   (let [cfg (load-validated-config global-opts env)]
     {:config cfg,
      :silo
      (silo/resolve-silo cfg (select-keys global-opts [:silo :root]) cwd env),
      :env env,
-     :cwd cwd}))
+     :cwd cwd,
+     :tty? tty?}))
 
 (defn- render-notes
   [notes {:keys [json edn print0]}]
@@ -146,43 +146,95 @@ Commands:
         :else (str/join "\n" (map :relative-path notes))))
 
 (defn- interactive-tty?
-  "True when this process is attached to a terminal the user can interact
-  with (fzf needs one)."
+  "Best-effort check that this process is attached to an interactive
+  terminal. On JDK 22+ System/console returns a console even when
+  redirected, so consult isTerminal (reflectively: it does not exist on
+  older JDKs, where a non-nil console already means interactive)."
   []
-  (some? (System/console)))
+  (let [console (System/console)]
+    (boolean (and console
+                  (let [is-terminal (try (.getMethod java.io.Console
+                                                     "isTerminal"
+                                                     (into-array Class []))
+                                         (catch NoSuchMethodException _ nil))]
+                    (if is-terminal
+                      (.invoke is-terminal console (object-array 0))
+                      true))))))
 
-(defn- fzf-select
-  "Narrow NOTES with the configured fzf selector. Returns the selection,
-  nil when the user cancelled, or NOTES unchanged when the selector is not
-  available."
-  [context notes]
-  (let [fzf-argv (get-in context [:config :tools :fzf] ["fzf"])]
-    (if (process/available? (first fzf-argv))
-      (when-let [chosen (process/select (map :relative-path notes) fzf-argv)]
-        (filterv (comp (set chosen) :relative-path) notes))
-      notes)))
+(def ^:private print-key
+  "fzf key that prints the selection instead of opening it."
+  "ctrl-p")
+
+(defn- fzf-selector?
+  "True when the configured selector is fzf itself (rather than an
+  arbitrary line filter), i.e. it understands --multi and --expect."
+  [argv]
+  (str/includes? (last (str/split (first argv) #"/")) "fzf"))
+
+(defn- run-selector
+  "Interactively narrow CANDIDATES with the configured selector. Returns
+  {:action :open|:print :chosen [lines]}, :cancelled when the user backed
+  out, or :unavailable when the selector is not installed. Real fzf gets
+  --multi and --expect so Enter opens and Ctrl-P prints; other selectors
+  always report :open."
+  [context candidates]
+  (let [argv (get-in context [:config :tools :fzf] ["fzf"])]
+    (if-not (process/available? (first argv))
+      :unavailable
+      (let [fzf? (fzf-selector? argv)
+            argv (cond-> (vec argv)
+                   fzf? (into ["--multi" (str "--expect=" print-key)]))
+            {:keys [exit out error]}
+              (process/run argv {:in (str (str/join "\n" candidates) "\n")})]
+        (if (or error (not (zero? exit)))
+          :cancelled
+          (let [lines (str/split-lines out)
+                [key chosen] (if fzf? [(first lines) (rest lines)] [nil lines])]
+            {:action (if (= key print-key) :print :open),
+             :chosen (vec (remove str/blank? chosen))}))))))
+
+(defn- open-in-editor
+  [context paths]
+  (let [{:keys [exit]} (editor/open paths (assoc context :inherit-io? true))]
+    {:exit (if (zero? exit) (exit-codes :success) (exit-codes :tool)),
+     :out ""}))
+
+(defn- interactive-output?
+  "Selection engages only on a terminal and when no scripted output format
+  was requested."
+  [context {:keys [json edn print0]}]
+  (boolean (and (:tty? context) (not (or json edn print0)))))
 
 (defn- find-notes
-  "Shared body for find/open: filter, sort, narrow with fzf when requested
-  (or on an interactive terminal), then print or launch the editor."
-  [context options query {:keys [open? fzf?]}]
+  "Filter and sort notes; on a terminal narrow with the selector (Enter
+  opens, Ctrl-P prints), otherwise print."
+  [context options query]
   (let [filters (assoc (select-keys options
                                     [:match :keyword :signature :title :id])
                   :query query)
         notes (-> (search/list-notes context filters {})
-                  (search/sort-notes (keyword (:sort options)) {}))
-        notes (if (and (seq notes) (or fzf? (and open? (interactive-tty?))))
-                (fzf-select context notes)
-                notes)]
-    (cond
-      (nil? notes) {:exit (exit-codes :no-match), :out "Selection cancelled"}
-      (empty? notes) {:exit (exit-codes :no-match), :out "No matching notes"}
-      open? (let [{:keys [exit]} (editor/open (map :path notes)
-                                              (assoc context
-                                                :inherit-io? true))]
-              {:exit (if (zero? exit) (exit-codes :success) (exit-codes :tool)),
-               :out ""})
-      :else {:exit (exit-codes :success), :out (render-notes notes options)})))
+                  (search/sort-notes (keyword (:sort options)) {}))]
+    (cond (empty? notes) {:exit (exit-codes :no-match),
+                          :out "No matching notes"}
+          (not (interactive-output? context options))
+            {:exit (exit-codes :success), :out (render-notes notes options)}
+          :else (let [result (run-selector context (map :relative-path notes))]
+                  (case result
+                    :unavailable {:exit (exit-codes :success),
+                                  :out (render-notes notes options)}
+                    :cancelled {:exit (exit-codes :no-match),
+                                :out "Selection cancelled"}
+                    (let [{:keys [action chosen]} result
+                          chosen-notes
+                            (filterv (comp (set chosen) :relative-path) notes)]
+                      (cond (empty? chosen-notes) {:exit (exit-codes :no-match),
+                                                   :out "No matching notes"}
+                            (= action :print) {:exit (exit-codes :success),
+                                               :out (render-notes chosen-notes
+                                                                  options)}
+                            :else (open-in-editor context
+                                                  (map :path
+                                                    chosen-notes)))))))))
 
 (defn- handle-find
   [context args]
@@ -190,21 +242,7 @@ Commands:
                                                                  find-options)]
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (find-notes context
-                  options
-                  (first arguments)
-                  {:open? (:open options), :fzf? (:fzf options)}))))
-
-(defn- handle-open
-  [context args]
-  (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
-                                                                 find-options)]
-    (if errors
-      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (find-notes context
-                  options
-                  (first arguments)
-                  {:open? true, :fzf? (:fzf options)}))))
+      (find-notes context options (first arguments)))))
 
 (defn- resolve-note-path
   "Resolve FILE-OR-ID to a note path: an identifier looks the note up in
@@ -219,15 +257,29 @@ Commands:
 (defn- handle-grep
   [context args]
   (if-let [query (first args)]
-    (let [matches (search/grep context query {})]
-      (if (seq matches)
-        {:exit (exit-codes :success),
-         :out (str/join "\n"
-                        (map #(str (:relative-path %)
-                                   ":" (:line-number %)
-                                   ":" (:line %))
-                          matches))}
-        {:exit (exit-codes :no-match), :out "No matches"}))
+    (let [matches (search/grep context query {})
+          lines
+            (mapv #(str (:relative-path %) ":" (:line-number %) ":" (:line %))
+              matches)]
+      (cond (empty? matches) {:exit (exit-codes :no-match), :out "No matches"}
+            (not (interactive-output? context nil))
+              {:exit (exit-codes :success), :out (str/join "\n" lines)}
+            :else (let [result (run-selector context lines)]
+                    (case result
+                      :unavailable {:exit (exit-codes :success),
+                                    :out (str/join "\n" lines)}
+                      :cancelled {:exit (exit-codes :no-match),
+                                  :out "Selection cancelled"}
+                      (let [{:keys [action chosen]} result
+                            by-line (zipmap lines matches)]
+                        (cond (empty? chosen) {:exit (exit-codes :no-match),
+                                               :out "No matches"}
+                              (= action :print) {:exit (exit-codes :success),
+                                                 :out (str/join "\n" chosen)}
+                              :else (open-in-editor context
+                                                    (distinct
+                                                      (keep (comp :path by-line)
+                                                            chosen)))))))))
     {:exit (exit-codes :usage), :out "Usage: denote grep QUERY"}))
 
 (defn- handle-backlinks
@@ -443,9 +495,6 @@ Commands:
 (def ^:private command-spec
   "Command surface used for dispatch documentation and completion scripts."
   [{:name "find", :description "Find notes", :options find-options}
-   {:name "open",
-    :description "Open matching notes in the editor",
-    :options find-options}
    {:name "grep", :description "Search note contents", :options []}
    {:name "backlinks",
     :description "Notes linking to the given note",
@@ -647,7 +696,9 @@ Commands:
   :env (map of environment variables) and :cwd, so tests can inject both."
   ([args]
    (run args
-        {:env (into {} (System/getenv)), :cwd (System/getProperty "user.dir")}))
+        {:env (into {} (System/getenv)),
+         :cwd (System/getProperty "user.dir"),
+         :tty? (interactive-tty?)}))
   ([args harness]
    (let [{:keys [options arguments errors]}
            (tools-cli/parse-opts args global-options :in-order true)
@@ -660,8 +711,6 @@ Commands:
                {:exit (exit-codes :success), :out help-text}
              (= command "silo") (handle-silo options harness command-args)
              (= command "find") (handle-find (make-context options harness)
-                                             command-args)
-             (= command "open") (handle-open (make-context options harness)
                                              command-args)
              (= command "rename") (handle-rename (make-context options harness)
                                                  command-args)
