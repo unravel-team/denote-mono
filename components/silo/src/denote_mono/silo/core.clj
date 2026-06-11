@@ -6,11 +6,14 @@
             [denote-mono.filesystem.interface :as fs]))
 
 (defn all-silos
-  "Map of silo name to {:name NAME :path EXPANDED-PATH}."
+  "Map of silo name to {:name NAME :path EXPANDED-PATH :llm-wiki BOOL}."
   [cfg env]
   (into {}
-        (map (fn [[name {:keys [path]}]]
-               [name {:name name, :path (config/expand-home path env)}]))
+        (map (fn [[name {:keys [path llm-wiki]}]]
+               [name
+                {:name name,
+                 :path (config/expand-home path env),
+                 :llm-wiki (boolean llm-wiki)}]))
         (:silos cfg)))
 
 (defn path-for
@@ -52,3 +55,36 @@
                 (get silos (:default-silo cfg))
                 (throw (ex-info "No silo selected and no default configured"
                                 {:type :validation, :silos (keys silos)}))))))
+
+(defn resolve-llm-wiki-silo
+  "Resolve the llm-wiki silo a `denote llm-wiki` command operates in.
+  Order mirrors resolve-silo but only silos flagged :llm-wiki qualify:
+  explicit :silo name (must be flagged), explicit :root path (taken as an
+  ad-hoc llm-wiki root), current directory containment among flagged
+  silos, configured :default-llm-wiki-silo. Throws ex-info
+  {:type :validation} listing the configured llm-wiki silos."
+  [cfg {:keys [silo root]} cwd env]
+  (let [silos (all-silos cfg env)
+        wiki-silos (into {} (filter (fn [[_ s]] (:llm-wiki s))) silos)]
+    (cond silo (let [found (get silos (silo-name-key silo))]
+                 (cond (nil? found) (throw (ex-info (str "Unknown silo: " silo)
+                                                    {:type :validation,
+                                                     :silos (keys wiki-silos)}))
+                       (not (:llm-wiki found))
+                         (throw (ex-info (str
+                                           "Silo " silo
+                                           " is not an llm-wiki silo; flag it"
+                                             " with :llm-wiki true")
+                                         {:type :validation,
+                                          :silos (keys wiki-silos)}))
+                       :else found))
+          root {:name nil,
+                :path (fs/canonical (config/expand-home root env)),
+                :llm-wiki true}
+          :else (or (when cwd
+                      (some (fn [[_ s]] (when (in-silo? cwd s) s)) wiki-silos))
+                    (get wiki-silos (:default-llm-wiki-silo cfg))
+                    (throw
+                      (ex-info
+                        "No llm-wiki silo selected and no default configured"
+                        {:type :validation, :silos (keys wiki-silos)}))))))

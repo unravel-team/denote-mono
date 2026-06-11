@@ -22,6 +22,15 @@
     (is (= #{:notes :work} (set (keys silos))))
     (is (= notes (get-in silos [:notes :path])))))
 
+(deftest all-silos-llm-wiki-flag-test
+  (let [notes (temp-dir)
+        wiki (temp-dir)
+        silos (silo/all-silos {:silos {:notes {:path notes},
+                                       :wiki {:path wiki, :llm-wiki true}}}
+                              {})]
+    (is (false? (get-in silos [:notes :llm-wiki])))
+    (is (true? (get-in silos [:wiki :llm-wiki])))))
+
 (deftest path-for-test
   (let [notes (temp-dir)
         config (test-config notes (temp-dir))]
@@ -60,6 +69,58 @@
                                       {}
                                       "/elsewhere"
                                       {}))))))
+
+(deftest resolve-llm-wiki-silo-test
+  (let [notes (temp-dir)
+        wiki (temp-dir)
+        wiki2 (temp-dir)
+        config {:default-silo :notes,
+                :default-llm-wiki-silo :wiki,
+                :silos {:notes {:path notes},
+                        :wiki {:path wiki, :llm-wiki true},
+                        :wiki2 {:path wiki2, :llm-wiki true}}}]
+    (testing "--silo selects a flagged silo"
+      (is (= :wiki2
+             (:name
+               (silo/resolve-llm-wiki-silo config {:silo :wiki2} nil {})))))
+    (testing "string silo names are accepted"
+      (is (= :wiki2
+             (:name
+               (silo/resolve-llm-wiki-silo config {:silo "wiki2"} nil {})))))
+    (testing "--silo naming a non-llm-wiki silo errors"
+      (let [e (try (silo/resolve-llm-wiki-silo config {:silo :notes} nil {})
+                   (catch Exception e (ex-data e)))]
+        (is (= :validation (:type e)))))
+    (testing "unknown silo name errors with configured llm-wiki silos"
+      (let [e (try (silo/resolve-llm-wiki-silo config {:silo :nope} nil {})
+                   (catch Exception e (ex-data e)))]
+        (is (= :validation (:type e)))
+        (is (= #{:wiki :wiki2} (set (:silos e))))))
+    (testing "--root makes an ad-hoc llm-wiki root"
+      (let [resolved (silo/resolve-llm-wiki-silo config {:root wiki2} nil {})]
+        (is (nil? (:name resolved)))
+        (is (true? (:llm-wiki resolved)))
+        (is (= (fs/canonical wiki2) (:path resolved)))))
+    (testing "cwd inside a flagged silo selects it"
+      (is (= :wiki2
+             (:name
+               (silo/resolve-llm-wiki-silo config {} (str wiki2 "/sub") {})))))
+    (testing "cwd inside a non-flagged silo falls through to the default"
+      (is (= :wiki
+             (:name
+               (silo/resolve-llm-wiki-silo config {} (str notes "/sub") {})))))
+    (testing "falls back to :default-llm-wiki-silo"
+      (is (= :wiki
+             (:name (silo/resolve-llm-wiki-silo config {} "/elsewhere" {})))))
+    (testing "no default and no match errors listing llm-wiki silos"
+      (let [e (try (silo/resolve-llm-wiki-silo (dissoc config
+                                                 :default-llm-wiki-silo)
+                                               {}
+                                               "/elsewhere"
+                                               {})
+                   (catch Exception e (ex-data e)))]
+        (is (= :validation (:type e)))
+        (is (= #{:wiki :wiki2} (set (:silos e))))))))
 
 (deftest in-silo?-test
   (let [notes (temp-dir)]
