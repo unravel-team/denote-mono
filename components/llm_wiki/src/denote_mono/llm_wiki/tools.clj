@@ -190,6 +190,15 @@
             (str relative-path ":" line-number ":" line))
       (search/grep context query {}))))
 
+(defn- normalize-keywords
+  "The schema declares an array, but models sometimes send one comma- or
+  space-separated string; charsplitting that into the filename would be
+  garbage."
+  [keywords]
+  (if (string? keywords)
+    (vec (remove str/blank? (str/split keywords #"[,\s]+")))
+    (vec keywords)))
+
 (defn- run-create-note
   [context state {:keys [title keywords parent_sequence body source_paths]}]
   (let [root (silo-root context)
@@ -201,7 +210,7 @@
         sources (mapv fs/canonical
                   (or (not-empty source_paths) (:default-sources @state)))
         plan (note/plan-new {:title title,
-                             :keywords (vec keywords),
+                             :keywords (normalize-keywords keywords),
                              :signature signature,
                              :type :markdown-yaml,
                              :template (str (str/trim body)

@@ -197,6 +197,17 @@
         (is (str/includes? (fs/read-text (wiki-path context (:path result)))
                            (str "(file:" (fs/canonical source) ")")))))))
 
+(deftest execute-tool-string-keywords-test
+  (testing "keywords sent as one string are split, not char-exploded"
+    (let [context (make-context)
+          state (atom {:created [], :updated [], :default-sources []})
+          execute (llm-wiki/make-execute-tool context state)
+          result (execute "create_note"
+                          {:title "Loose Model",
+                           :keywords "ml, ai sequencing",
+                           :body "Body."})]
+      (is (str/ends-with? (:path result) "__ai_ml_sequencing.md")))))
+
 (deftest execute-tool-update-note-test
   (let [context (make-context)
         old-source (str (temp-dir) "/old.txt")
