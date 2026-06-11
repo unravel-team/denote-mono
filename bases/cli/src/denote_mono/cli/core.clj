@@ -47,11 +47,9 @@ Commands:
                    On a terminal fzf selects: Enter opens, Ctrl-P prints
   backlinks ID|F   Notes linking to the given note
   links FILE_OR_ID Outgoing denote: links of a note
-  rename FILE      Rename one note (--title --keyword --signature --id
-                   --date --front-matter MODE --break-links --dry-run --yes)
-  rename-many F... Batch rename (--add-keyword --remove-keyword
-                   --replace-keywords KW,KW --from-front-matter
-                   --dry-run --yes)
+  rename FILE      Rename any file into Denote form (--title --keyword
+                   --signature --id --date --front-matter MODE
+                   --break-links --dry-run --yes)
   new              Create a note (--title --keyword --signature --id
                    --date --type --subdir --dry-run --reuse-empty)
   seq validate SEQ [--scheme S]
@@ -104,13 +102,6 @@ Commands:
     keyword] [nil "--dry-run" "Print the plan without applying it"]
    [nil "--break-links" "Allow identifier changes that break backlinks"]
    [nil "--yes" "Apply without confirmation"]])
-
-(def ^:private rename-many-options
-  (conj rename-options
-        [nil "--add-keyword KW" "Add a keyword to every file"]
-        [nil "--remove-keyword KW" "Remove a keyword from every file"]
-        [nil "--replace-keywords KWS" "Replace keywords (comma-separated)"]
-        [nil "--from-front-matter" "Take components from front matter"]))
 
 (def ^:private new-options
   [[nil "--title TITLE" "Note title"]
@@ -349,10 +340,11 @@ Commands:
 
 (defn- guard-broken-links!
   "Refuse identifier changes that would break existing backlinks, unless
-  --break-links was passed. Throws ex-info {:type :validation} naming the
+  --break-links was passed. Only applies inside a silo: outside there is
+  no link graph to protect. Throws ex-info {:type :validation} naming the
   affected notes."
   [context plans options]
-  (when-not (:break-links options)
+  (when-not (or (:break-links options) (nil? (:silo context)))
     (doseq [{:keys [source old new]} plans
             :let [old-id (:identifier old)]
             :when (and old-id (not= old-id (:identifier new)))]
@@ -364,15 +356,26 @@ Commands:
                                (str/join "\n" (map :relative-path linking)))
                         {:type :validation, :identifier old-id}))))))
 
+(defn- rename-context
+  "Context for renaming FILE. Rename is a plain file operation that works
+  anywhere; the silo (when FILE sits inside a configured one) only scopes
+  the backlink guard."
+  [global-opts {:keys [env cwd tty?]} file]
+  (let [cfg (load-validated-config global-opts env)
+        silos (sort-by key (silo/all-silos cfg env))
+        containing (some (fn [[_ s]] (when (silo/in-silo? file s) s)) silos)]
+    {:config cfg, :silo containing, :env env, :cwd cwd, :tty? tty?}))
+
 (defn- handle-rename
-  [context args]
+  [global-opts harness args]
   (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
                                                                  rename-options)
         file (first arguments)]
     (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
           (nil? file) {:exit (exit-codes :usage),
                        :out "Usage: denote rename FILE [OPTIONS]"}
-          :else (let [plan (rename/plan-rename file
+          :else (let [context (rename-context global-opts harness file)
+                      plan (rename/plan-rename file
                                                (options->changes options)
                                                context
                                                {:front-matter (:front-matter
@@ -387,41 +390,6 @@ Commands:
                            :out (str (:source applied)
                                      " -> "
                                      (:destination applied))})))))))
-
-(defn- batch-changes-from-options
-  [options]
-  (cond (:add-keyword options) {:add-keyword (:add-keyword options)}
-        (:remove-keyword options) {:remove-keyword (:remove-keyword options)}
-        (:replace-keywords options)
-          {:replace-keywords (str/split (:replace-keywords options) #",")}
-        (:from-front-matter options) {:from-front-matter true}
-        :else (options->changes options)))
-
-(defn- handle-rename-many
-  [context args]
-  (let [{:keys [options arguments errors]}
-          (tools-cli/parse-opts args rename-many-options)]
-    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-          (empty? arguments) {:exit (exit-codes :usage),
-                              :out
-                              "Usage: denote rename-many FILE... [OPTIONS]"}
-          :else
-            (let [{:keys [plans errors]}
-                    (rename/plan-batch arguments
-                                       (batch-changes-from-options options)
-                                       context
-                                       {:front-matter (:front-matter options)})
-                  table (str/join "\n" (map render-plan plans))]
-              (cond (seq errors) {:exit (exit-codes :collision),
-                                  :out (str/join "\n" (map :message errors))}
-                    (:dry-run options) {:exit (exit-codes :success), :out table}
-                    (not (:yes options))
-                      {:exit (exit-codes :validation),
-                       :out (str table
-                                 "\nRe-run with --yes to apply, or --dry-run "
-                                 "to preview.")}
-                    :else (do (guard-broken-links! context plans options)
-                              (apply-batch-and-report plans)))))))
 
 (defn- new-changes-from-options
   [options]
@@ -500,10 +468,7 @@ Commands:
     :description "Notes linking to the given note",
     :options []}
    {:name "links", :description "Outgoing links of a note", :options []}
-   {:name "rename", :description "Rename one note", :options rename-options}
-   {:name "rename-many",
-    :description "Batch rename notes",
-    :options rename-many-options}
+   {:name "rename", :description "Rename one file", :options rename-options}
    {:name "new", :description "Create a note", :options new-options}
    {:name "seq",
     :description "Folgezettel sequence operations",
@@ -703,38 +668,35 @@ Commands:
    (let [{:keys [options arguments errors]}
            (tools-cli/parse-opts args global-options :in-order true)
          [command & command-args] arguments]
-     (try
-       (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-             (or (:version options) (= "version" command))
-               {:exit (exit-codes :success), :out (version-string)}
-             (or (nil? command) (:help options) (= "help" command))
-               {:exit (exit-codes :success), :out help-text}
-             (= command "silo") (handle-silo options harness command-args)
-             (= command "find") (handle-find (make-context options harness)
-                                             command-args)
-             (= command "rename") (handle-rename (make-context options harness)
-                                                 command-args)
-             (= command "rename-many")
-               (handle-rename-many (make-context options harness) command-args)
-             (= command "new") (handle-new (make-context options harness)
-                                           command-args)
-             (= command "grep") (handle-grep (make-context options harness)
-                                             command-args)
-             (= command "backlinks")
-               (handle-backlinks (make-context options harness) command-args)
-             (= command "links") (handle-links (make-context options harness)
-                                               command-args)
-             (= command "seq") (handle-seq (make-context options harness)
-                                           command-args)
-             (= command "completions") (handle-completions command-args)
-             :else {:exit (exit-codes :usage),
-                    :out (str "Unknown command: " command "\n\n" help-text)})
-       (catch clojure.lang.ExceptionInfo e
-         {:exit (exit-codes (or (:type (ex-data e)) :failure)),
-          :out (str (ex-message e)
-                    (when-let [silos (seq (:silos (ex-data e)))]
-                      (str "\nConfigured silos: "
-                           (str/join ", " (map name silos)))))})))))
+     (try (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+                (or (:version options) (= "version" command))
+                  {:exit (exit-codes :success), :out (version-string)}
+                (or (nil? command) (:help options) (= "help" command))
+                  {:exit (exit-codes :success), :out help-text}
+                (= command "silo") (handle-silo options harness command-args)
+                (= command "find") (handle-find (make-context options harness)
+                                                command-args)
+                (= command "rename")
+                  (handle-rename options harness command-args)
+                (= command "new") (handle-new (make-context options harness)
+                                              command-args)
+                (= command "grep") (handle-grep (make-context options harness)
+                                                command-args)
+                (= command "backlinks")
+                  (handle-backlinks (make-context options harness) command-args)
+                (= command "links") (handle-links (make-context options harness)
+                                                  command-args)
+                (= command "seq") (handle-seq (make-context options harness)
+                                              command-args)
+                (= command "completions") (handle-completions command-args)
+                :else {:exit (exit-codes :usage),
+                       :out (str "Unknown command: " command "\n\n" help-text)})
+          (catch clojure.lang.ExceptionInfo e
+            {:exit (exit-codes (or (:type (ex-data e)) :failure)),
+             :out (str (ex-message e)
+                       (when-let [silos (seq (:silos (ex-data e)))]
+                         (str "\nConfigured silos: "
+                              (str/join ", " (map name silos)))))})))))
 
 (defn -main
   [& args]

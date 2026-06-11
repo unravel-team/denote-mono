@@ -93,61 +93,6 @@
                                  {:front-matter :none})]
     (is (nil? (:content-change plan)))))
 
-(deftest batch-keyword-operations-test
-  (let [files [(str *root* "/20240101T000000--alpha__one.org")
-               (str *root* "/20240102T000000--beta__two.org")]]
-    (testing "add keyword to all files"
-      (let [{:keys [plans errors]} (rename/plan-batch files
-                                                      {:add-keyword "shared"}
-                                                      (context)
-                                                      {:front-matter :none})]
-        (is (empty? errors))
-        (is (every? #(some #{"shared"} (get-in % [:new :keywords])) plans))))
-    (testing "remove keyword"
-      (let [{:keys [plans]} (rename/plan-batch files
-                                               {:remove-keyword "one"}
-                                               (context)
-                                               {:front-matter :none})]
-        (is (nil? (get-in (first plans) [:new :keywords])))))
-    (testing "replace keywords"
-      (let [{:keys [plans]} (rename/plan-batch files
-                                               {:replace-keywords ["a" "b"]}
-                                               (context)
-                                               {:front-matter :none})]
-        (is (every? #(= ["a" "b"] (get-in % [:new :keywords])) plans))))))
-
-(deftest batch-duplicate-destination-test
-  (let [files [(str *root* "/20240101T000000--alpha__one.org")
-               (str *root* "/20240102T000000--beta__two.org")]
-        {:keys [errors]} (rename/plan-batch files
-                                            {:identifier "20240909T090909",
-                                             :title "same",
-                                             :keywords ["kw"]}
-                                            (context)
-                                            {:front-matter :none})]
-    (is (seq errors))
-    (is (every? #(= :collision (:type %)) errors))))
-
-(deftest from-front-matter-test
-  (let [file (str *root* "/20240101T000000--alpha__one.org")]
-    ;; Change the title and identifier lines; the identifier line, not the
-    ;; date line, must drive the new filename ID.
-    (spit file
-          (str "#+title:      From FM\n"
-               "#+date:       [2030-12-31 Tue 00:00]\n" "#+filetags:   :fmkw:\n"
-               "#+identifier: 20250505T050505\n" "\nBody\n"))
-    (let [{:keys [plans errors]} (rename/plan-batch [file]
-                                                    {:from-front-matter true}
-                                                    (context)
-                                                    {:front-matter :none})
-          plan (first plans)]
-      (is (empty? errors))
-      (is (= "20250505T050505" (get-in plan [:new :identifier])))
-      (is (= "From FM" (get-in plan [:new :title])))
-      (is (= ["fmkw"] (get-in plan [:new :keywords])))
-      (is (str/ends-with? (:destination plan)
-                          "/20250505T050505--from-fm__fmkw.org")))))
-
 (deftest apply-batch-stops-on-failure-test
   (spit (str *root* "/20240103T000000--x__two.org") "occupied")
   (let [file-a (str *root* "/20240101T000000--alpha__one.org")

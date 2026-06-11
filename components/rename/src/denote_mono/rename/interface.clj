@@ -6,10 +6,6 @@
   [file changes context opts]
   (core/plan-rename file changes context opts))
 
-(defn plan-batch
-  [files batch-changes context opts]
-  (core/plan-batch files batch-changes context opts))
-
 (defn validate-plan [plan opts] (core/validate-plan plan opts))
 
 (defn apply-plan [plan opts] (core/apply-plan plan opts))

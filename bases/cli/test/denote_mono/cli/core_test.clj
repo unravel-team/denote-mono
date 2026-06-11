@@ -213,8 +213,20 @@
       (is (.exists (java.io.File.
                      (str *notes-root*
                           "/20240101T000000--renamed__clojure.org"))))))
-  (testing "file outside silo exits with validation code"
-    (is (= 3 (:exit (run-cli "rename" "/etc/hosts" "--title" "x"))))))
+  (testing "a file outside any silo is renamed (denote-ified) in place"
+    (let [outside (temp-dir "denote-cli-outside")
+          file (str outside "/plain note.txt")]
+      (spit file "content")
+      (let [{:keys [exit out]} (run-cli "rename" file
+                                        "--title" "Plain Note"
+                                        "--date" "2025-05-05 05:05:05"
+                                        "--front-matter" "none")]
+        (is (zero? exit))
+        (is (str/includes? out "20250505T050505--plain-note.txt"))
+        (is (.exists (java.io.File.
+                       (str outside "/20250505T050505--plain-note.txt")))))))
+  (testing "rename-many is no longer a command"
+    (is (= 2 (:exit (run-cli "rename-many" "--add-keyword" "x" "f"))))))
 
 (deftest rename-break-links-command
   (spit (str *notes-root* "/20240101T000000--alpha__clojure.org")
@@ -241,28 +253,18 @@
                                    (str *notes-root*
                                         "/20240101T000000--alpha__clojure.org")
                                  "--title" "alpha-two"
-                                 "--front-matter" "none")))))))
-
-(deftest rename-many-command
-  (testing "without --yes prints plan and asks for confirmation"
-    (let [{:keys [exit out]}
-            (run-cli "rename-many" "--add-keyword"
-                     "extra" (str *notes-root*
-                                  "/20240101T000000--alpha__clojure.org"))]
-      (is (= 3 exit))
-      (is (str/includes? out "--yes"))))
-  (testing "with --yes applies the batch"
-    (let [{:keys [exit out]}
-            (run-cli "rename-many"
-                     "--add-keyword" "extra"
-                     "--front-matter" "none"
-                     "--yes" (str *notes-root*
-                                  "/20240101T000000--alpha__clojure.org"))]
-      (is (zero? exit))
-      (is (str/includes? out "Renamed 1"))
-      (is (.exists (java.io.File.
-                     (str *notes-root*
-                          "/20240101T000000--alpha__clojure_extra.org")))))))
+                                 "--front-matter" "none")))))
+    (testing "identifier changes outside a silo skip the guard"
+      ;; alpha links to 20240102T000000, but this file with the same
+      ;; identifier lives outside every silo, so the guard does not fire.
+      (let [outside (temp-dir "denote-cli-outside-guard")
+            file (str outside "/20240102T000000--copy__x.org")]
+        (spit file "copy")
+        (is (zero? (:exit (run-cli "rename" file
+                                   "--id" "20310101T000000"
+                                   "--front-matter" "none"))))
+        (is (.exists (java.io.File. (str outside
+                                         "/20310101T000000--copy__x.org"))))))))
 
 (deftest grep-backlinks-links-commands
   (spit (str *notes-root* "/20240101T000000--alpha__clojure.org")
@@ -399,7 +401,8 @@
     (let [{:keys [exit out]} (run-cli "completions" "bash")]
       (is (zero? exit))
       (is (str/includes? out "complete -o default -F _denote denote"))
-      (is (str/includes? out "rename-many"))
+      (is (str/includes? out "rename"))
+      (is (not (str/includes? out "rename-many")))
       (is (str/includes? out "--break-links"))
       (is (str/includes? out "as-parent"))
       (let [script (str (temp-dir "denote-completions") "/denote.bash")]
@@ -409,7 +412,7 @@
     (let [{:keys [exit out]} (run-cli "completions" "zsh")]
       (is (zero? exit))
       (is (str/starts-with? out "#compdef denote"))
-      (is (str/includes? out "'rename:Rename one note'"))
+      (is (str/includes? out "'rename:Rename one file'"))
       (is (str/includes? out "'--break-links["))
       (let [script (str (temp-dir "denote-completions") "/_denote")]
         (spit script out)

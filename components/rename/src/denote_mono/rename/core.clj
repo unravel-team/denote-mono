@@ -122,65 +122,6 @@
                      (front-matter/apply-rewrite content content-change))))
   (assoc plan :applied true))
 
-(defn- changes-for-file
-  "Translate BATCH-CHANGES into a per-file changes map."
-  [path batch-changes context]
-  (let [parsed (filename/parse path)
-        keywords (vec (:keywords parsed))]
-    (cond (:add-keyword batch-changes)
-            {:keywords (vec (distinct (conj keywords
-                                            (:add-keyword batch-changes))))}
-          (:remove-keyword batch-changes)
-            {:keywords (vec (remove #{(:remove-keyword batch-changes)}
-                              keywords))}
-          (:replace-keywords batch-changes) {:keywords (vec (:replace-keywords
-                                                              batch-changes))}
-          (:from-front-matter batch-changes)
-            (let [content (fs/read-text path)
-                  type (file-type/detect path
-                                         content
-                                         (get-in context [:config :filename]))
-                  meta (front-matter/parse type content {})]
-              ;; The identifier line — not the date line — controls the ID.
-              (cond-> {}
-                (contains? meta :title) (assoc :title (:title meta))
-                (contains? meta :keywords) (assoc :keywords (:keywords meta))
-                (contains? meta :signature) (assoc :signature (:signature meta))
-                (contains? meta :identifier) (assoc :identifier
-                                               (:identifier meta))))
-          :else batch-changes)))
-
-(defn plan-batch
-  "Plan renames for FILES. Detects duplicate destinations and
-  source/destination overlaps before anything mutates. Returns
-  {:plans [...] :errors [...]}."
-  [files batch-changes context opts]
-  (let [plans (mapv #(plan-rename %
-                                  (changes-for-file % batch-changes context)
-                                  context
-                                  opts)
-                files)
-        changing (filterv #(not= (:source %) (:destination %)) plans)
-        sources (set (map :source plans))
-        duplicate-destinations (->> (map :destination changing)
-                                    frequencies
-                                    (filter #(> (val %) 1))
-                                    (map key))
-        errors (concat (for [dest duplicate-destinations]
-                         {:type :collision,
-                          :message (str "Duplicate destination: " dest)})
-                       (for [{:keys [destination]} changing
-                             :when (and (fs/exists? destination)
-                                        (not (sources destination)))]
-                         {:type :collision,
-                          :message (str "Destination exists: " destination)})
-                       (for [{:keys [destination]} changing
-                             :when (sources destination)]
-                         {:type :collision,
-                          :message (str "Destination is another source: "
-                                        destination)}))]
-    {:plans plans, :errors (vec errors)}))
-
 (defn apply-batch
   "Apply all plans, stopping at the first failure. Returns
   {:applied [...] :failed plan-or-nil :pending [...]}."
