@@ -97,6 +97,20 @@
         (is (= :tool (:role tool-result)))
         (is (= {"error" "boom"} (json/read-str (:content tool-result))))))))
 
+(deftest list-shaped-choices-test
+  (testing "providers returning :choices as a seq (openrouter) still work"
+    (let [complete (fn [_request]
+                     ;; a list, not a vector — indexed get-in returns nil
+                     {:choices (list {:message {:role :assistant,
+                                                :content "Hi."}})})
+          result (llm/run-tool-loop complete
+                                    {:system "s",
+                                     :user "u",
+                                     :tools [],
+                                     :execute-tool (fn [_ _] nil)})]
+      (is (= "Hi." (:final-text result)))
+      (is (= :done (:stopped result))))))
+
 (deftest on-event-test
   (testing "the loop reports requests and tool calls as they happen"
     (let [events (atom [])

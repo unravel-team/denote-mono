@@ -66,7 +66,10 @@
             response (complete-fn {:messages messages,
                                    :tools tools,
                                    :max-tokens max-tokens})
-            msg (get-in response [:choices 0 :message])
+            ;; first, not (get-in [:choices 0]): some provider transforms
+            ;; (openrouter) return :choices as a seq, where indexed get
+            ;; silently yields nil.
+            msg (:message (first (:choices response)))
             tool-calls (:tool-calls msg)]
         (cond
           (empty? tool-calls) {:final-text (:content msg),
