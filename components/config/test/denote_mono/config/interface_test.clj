@@ -11,7 +11,14 @@
     (is (true? (get-in defaults [:filename :sort-keywords?])))
     (is (= :org (get-in defaults [:filename :file-type])))
     (is (= :numeric (get-in defaults [:sequence :scheme])))
-    (is (= {} (:silos defaults)))))
+    (is (= {} (:silos defaults)))
+    (is (nil? (:default-llm-wiki-silo defaults)))
+    (is (= {:provider :anthropic,
+            :model "claude-opus-4-8",
+            :api-key-env "ANTHROPIC_API_KEY",
+            :api-base nil,
+            :max-rounds 20}
+           (:llm defaults)))))
 
 (deftest config-path-test
   (testing "XDG_CONFIG_HOME wins"
@@ -58,6 +65,31 @@
     (is (thrown? Exception
                  (config/validate (assoc (config/default-config)
                                     :silos {:notes {}}))))))
+
+(deftest validate-llm-wiki-test
+  (let [base (assoc (config/default-config)
+               :silos {:notes {:path "/n"},
+                       :wiki {:path "/w", :llm-wiki true}})]
+    (testing "flagged silo accepted as default-llm-wiki-silo"
+      (let [cfg (assoc base :default-llm-wiki-silo :wiki)]
+        (is (= cfg (config/validate cfg)))))
+    (testing "default-llm-wiki-silo must reference a configured silo"
+      (is (thrown-with-msg? Exception
+                            #"default-llm-wiki-silo"
+                            (config/validate (assoc base
+                                               :default-llm-wiki-silo :nope)))))
+    (testing "default-llm-wiki-silo must reference an llm-wiki silo"
+      (is (thrown-with-msg? Exception
+                            #"llm-wiki"
+                            (config/validate
+                              (assoc base :default-llm-wiki-silo :notes)))))
+    (testing ":llm-wiki flag must be a boolean when present"
+      (is (thrown-with-msg? Exception
+                            #"boolean"
+                            (config/validate
+                              (assoc-in base [:silos :wiki :llm-wiki] "yes")))))
+    (testing "absent flag and absent default are fine"
+      (is (= base (config/validate base))))))
 
 (deftest merge-cli-test
   (let [cfg (config/default-config)]

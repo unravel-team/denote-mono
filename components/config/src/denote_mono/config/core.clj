@@ -6,7 +6,13 @@
 
 (def default-config
   {:default-silo nil,
+   :default-llm-wiki-silo nil,
    :silos {},
+   :llm {:provider :anthropic,
+         :model "claude-opus-4-8",
+         :api-key-env "ANTHROPIC_API_KEY",
+         :api-base nil,
+         :max-rounds 20},
    :filename {:components-order [:identifier :signature :title :keywords],
               :sort-keywords? true,
               :identifier-delimiter-always? false,
@@ -57,15 +63,30 @@
   {:type :validation}."
   [config]
   (let [silos (:silos config)
-        default-silo (:default-silo config)]
+        default-silo (:default-silo config)
+        default-wiki (:default-llm-wiki-silo config)]
     (when-not (map? silos)
       (throw (ex-info ":silos must be a map" {:type :validation})))
     (doseq [[name silo] silos]
       (when-not (string? (:path silo))
         (throw (ex-info (str "Silo " name " needs a string :path")
+                        {:type :validation, :silo name})))
+      (when (and (contains? silo :llm-wiki) (not (boolean? (:llm-wiki silo))))
+        (throw (ex-info (str "Silo " name " :llm-wiki must be a boolean")
                         {:type :validation, :silo name}))))
     (when (and default-silo (not (contains? silos default-silo)))
       (throw (ex-info
                (str ":default-silo " default-silo " is not a configured silo")
                {:type :validation, :silos (keys silos)})))
+    (when default-wiki
+      (when-not (contains? silos default-wiki)
+        (throw (ex-info (str ":default-llm-wiki-silo "
+                             default-wiki
+                             " is not a configured silo")
+                        {:type :validation, :silos (keys silos)})))
+      (when-not (true? (get-in silos [default-wiki :llm-wiki]))
+        (throw (ex-info (str ":default-llm-wiki-silo " default-wiki
+                             " is not an llm-wiki silo; flag it with"
+                               " :llm-wiki true")
+                        {:type :validation, :silo default-wiki}))))
     config))
