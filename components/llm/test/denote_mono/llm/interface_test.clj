@@ -97,6 +97,25 @@
         (is (= :tool (:role tool-result)))
         (is (= {"error" "boom"} (json/read-str (:content tool-result))))))))
 
+(deftest complete-once-test
+  (testing "one tool-less completion over an existing transcript"
+    (let [requests (atom [])
+          transcript [{:role :system, :content "s"} {:role :user, :content "u"}
+                      {:role :assistant, :content "working"}]
+          text (llm/complete-once (scripted [{:role :assistant,
+                                              :content "Handoff: link 1=2."}]
+                                            requests)
+                                  transcript
+                                  "Summarize what remains."
+                                  {:max-tokens 512})]
+      (is (= "Handoff: link 1=2." text))
+      (let [request (first @requests)]
+        (is (nil? (:tools request)))
+        (is (= 512 (:max-tokens request)))
+        (is (= (conj transcript
+                     {:role :user, :content "Summarize what remains."})
+               (:messages request)))))))
+
 (deftest list-shaped-choices-test
   (testing "providers returning :choices as a seq (openrouter) still work"
     (let [complete (fn [_request]

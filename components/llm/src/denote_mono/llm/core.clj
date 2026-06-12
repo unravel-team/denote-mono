@@ -23,6 +23,15 @@
                            {:type :tool, :provider provider, :model model}
                            e))))))
 
+(defn complete-once
+  "One tool-less completion over MESSAGES plus a final user TEXT.
+  Returns the assistant's text, nil when the model returned none."
+  [complete-fn messages text {:keys [max-tokens], :or {max-tokens 4096}}]
+  (let [response (complete-fn {:messages (conj (vec messages)
+                                               {:role :user, :content text}),
+                               :max-tokens max-tokens})]
+    (:content (:message (first (:choices response))))))
+
 (defn- tool-result-message
   "Execute one tool call and shape its outcome as a :tool message.
   Executor exceptions become {:error MSG} results so the model can

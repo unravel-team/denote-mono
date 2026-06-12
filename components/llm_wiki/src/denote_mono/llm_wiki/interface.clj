@@ -13,6 +13,10 @@
 
 (defn append-log [context entry] (scaffold/append-log context entry))
 
+(defn ingest-history
+  [context source-path]
+  (scaffold/ingest-history context source-path))
+
 (defn lint [context opts] (lint/lint context opts))
 
 (defn tool-schemas [mode] (tools/tool-schemas mode))

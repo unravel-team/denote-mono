@@ -1,8 +1,10 @@
 (ns denote-mono.llm-wiki.scaffold
   "Create and maintain the machine-managed files of an LLM wiki silo:
   index.md, log.md, and wiki-schema.md."
-  (:require [denote-mono.filesystem.interface :as fs]
-            [denote-mono.llm-wiki.index :as index]))
+  (:require [clojure.string :as str]
+            [denote-mono.filesystem.interface :as fs]
+            [denote-mono.llm-wiki.index :as index])
+  (:import (java.util.regex Pattern)))
 
 (def file-names ["index.md" "log.md" "wiki-schema.md"])
 
@@ -51,6 +53,36 @@
                  (create-when-missing (path "wiki-schema.md")
                                       #(fs/write-text (path "wiki-schema.md")
                                                       schema-content))]))}))
+
+(defn- entry-detail
+  [entry key]
+  (second (re-find (re-pattern (str "(?m)^- " key ": (.*)$")) entry)))
+
+(defn- entry-details
+  [entry key]
+  (mapv second (re-seq (re-pattern (str "(?m)^- " key ": (.*)$")) entry)))
+
+(defn ingest-history
+  "The latest log.md ingest entry for SOURCE-PATH, as
+  {:status STR-or-nil :created [REL] :updated [REL] :remaining STR-or-nil}.
+  Nil when the source was never ingested into this wiki."
+  [context source-path]
+  (let [root (fs/canonical (get-in context [:silo :path]))
+        log-path (str root "/log.md")
+        source-abs (fs/canonical source-path)]
+    (when (fs/exists? log-path)
+      (let [entries (str/split (fs/read-text log-path) #"(?m)^## ")
+            source-line (re-pattern (str "(?m)^- source: file:"
+                                         (Pattern/quote source-abs)
+                                         "$"))
+            ingest-of-source? (fn [entry]
+                                (and (str/includes? entry "] ingest | ")
+                                     (re-find source-line entry)))]
+        (when-let [entry (last (filter ingest-of-source? entries))]
+          {:status (entry-detail entry "status"),
+           :created (entry-details entry "created"),
+           :updated (entry-details entry "updated"),
+           :remaining (entry-detail entry "remaining")})))))
 
 (defn append-log
   "Append ENTRY {:date :op :title :details} to log.md, creating the file

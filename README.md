@@ -239,7 +239,16 @@ denote llm-wiki lint --deep
 On a terminal, `ingest` narrates its progress to stderr as the model
 works (`round 2: creating note: ...`); stdout stays clean for the final
 report. `--model` and `--max-rounds` override the configured values per
-run. The model works through a constrained tool loop: it can list, read,
+run.
+
+Ingestion is resumable. Every ingest writes a `status:` line to `log.md`
+(`complete`, or `incomplete (max-rounds after N)`); when a run exhausts
+its round budget, the model is asked for a one-line *handoff note*
+describing the remaining work, which is logged too. Re-running the same
+`ingest` command then continues instead of starting over: the prompt
+tells the model which pages already exist from that source and what the
+handoff note said. Pass `--fresh` to ignore the history and ingest from
+scratch. The model works through a constrained tool loop: it can list, read,
 search, create, and update wiki notes, but filenames, identifiers, and
 sequence numbers are always assigned by denote itself, and
 `index.md`/`log.md` are off-limits to it (ADR 12).
@@ -277,7 +286,9 @@ seq list|tree [SEQ] [--depth N]
 seq convert FILE... --to SCHEME [--dry-run --yes]
 seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
 seq as-parent FILE
-llm-wiki ingest FILE      Distill a source into the LLM wiki silo
+llm-wiki ingest FILE      Distill a source into the LLM wiki silo;
+                          re-running continues an interrupted ingest
+                          (--fresh starts over)
 llm-wiki query QUESTION   Answer from the wiki (--save files it back)
 llm-wiki lint             Wiki health checks (--fix --deep)
 silo list|path [NAME]|doctor

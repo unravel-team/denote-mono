@@ -13,6 +13,7 @@
          :api-key-env "OPENROUTER_API_KEY",
          :api-base nil,
          :max-rounds 20,
+         :max-tokens 8192,
          :timeout-ms 300000},
    :filename {:components-order [:identifier :signature :title :keywords],
               :sort-keywords? true,

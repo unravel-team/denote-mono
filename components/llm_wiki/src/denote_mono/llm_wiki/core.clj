@@ -45,6 +45,12 @@
   [context opts]
   (or (:max-rounds opts) (get-in context [:config :llm :max-rounds]) 20))
 
+(defn- max-tokens
+  "Reply budget per round. Reasoning models spend hidden thinking tokens
+  from the same budget, so this errs generous."
+  [context]
+  (get-in context [:config :llm :max-tokens] 8192))
+
 (defn- schema-text
   [context]
   (let [path (str (silo-root context) "/wiki-schema.md")]
@@ -98,6 +104,48 @@
        " children refine their parents. Cross-link related pages in both"
          " directions. Finish with a one-paragraph report of what you did."))
 
+(def ^:private handoff-prompt
+  (str "Your round budget is exhausted. Reply with a short,"
+         " single-paragraph handoff note describing what remains to be done"
+       " for this source: pages not yet created, sections not yet covered,"
+         " missing cross-links. Plain text only."))
+
+(defn- one-line
+  [s]
+  (when s
+    (let [collapsed (str/trim (str/replace s #"\s+" " "))]
+      (when-not (str/blank? collapsed) collapsed))))
+
+(defn- handoff-note
+  "Ask the model to summarize the remaining work after an exhausted loop.
+  Best effort: nil when the extra request fails. The transcript may end
+  with an unanswered tool-call message, which providers reject — drop it."
+  [complete messages]
+  (try (let [messages (vec messages)
+             transcript (cond-> messages (:tool-calls (peek messages)) pop)]
+         (one-line (llm/complete-once complete
+                                      transcript
+                                      handoff-prompt
+                                      {:max-tokens 1024})))
+       (catch Exception _ nil)))
+
+(defn- continuation-section
+  "User-prompt block describing a previous ingest of the same source, so
+  the model continues instead of starting over."
+  [{:keys [status created updated remaining]}]
+  (str "This source was ingested before (status: "
+       (or status "unknown")
+       ").\n"
+       "Wiki pages already created or updated from it:\n"
+       (apply str (map #(str "- " % "\n") (distinct (concat created updated))))
+       (when remaining
+         (str "A handoff note from that run describes the remaining work:\n"
+              remaining
+              "\n"))
+       "Continue that work: check the source against these pages, complete"
+       " what is missing, and finish the cross-links. Prefer update_note"
+       " over creating duplicate pages."))
+
 (defn- validate-source!
   [source-path]
   (when-not (fs/exists? source-path)
@@ -118,36 +166,64 @@
   (validate-source! source-path)
   (let [abs (fs/canonical source-path)
         progress (progress-fn context)
+        history (when-not (:fresh? opts) (scaffold/ingest-history context abs))
         _ (scaffold/scaffold context)
         complete (complete-fn context opts)
         state (atom {:created [], :updated [], :default-sources [abs]})
-        _ (progress (str "ingesting " (basename abs)))
+        _ (progress (str "ingesting "
+                         (basename abs)
+                         (when history " (continuing a previous ingest)")))
         result (llm/run-tool-loop
                  complete
                  {:system
                   (str (schema-text context) "\n\n" ingest-instructions),
-                  :user (str "Source file: " abs
-                             "\n\n" (fs/read-text abs)
-                             "\n\nCurrent index:\n\n" (current-index context)),
+                  :user (str "Source file: "
+                             abs
+                             "\n\n"
+                             (fs/read-text abs)
+                             (when history
+                               (str "\n\n" (continuation-section history)))
+                             "\n\nCurrent index:\n\n"
+                             (current-index context)),
                   :tools (tools/tool-schemas :ingest),
                   :execute-tool (tools/make-execute-tool context state),
                   :max-rounds (max-rounds context opts),
+                  :max-tokens (max-tokens context),
                   :on-event (on-event-fn context)})
-        {:keys [created updated]} @state]
+        {:keys [created updated]} @state
+        incomplete? (= :max-rounds (:stopped result))
+        ;; A reply with no text, no tool calls, and no work done is a
+        ;; model failure (e.g. the whole token budget spent on hidden
+        ;; reasoning), not a finished ingest.
+        empty-reply? (and (= :done (:stopped result))
+                          (str/blank? (:final-text result))
+                          (empty? created)
+                          (empty? updated))
+        remaining (when incomplete?
+                    (progress "asking the model for a handoff note")
+                    (handoff-note complete (:messages result)))
+        status (cond incomplete? (str "incomplete (max-rounds after "
+                                      (:rounds result)
+                                      ")")
+                     empty-reply? "incomplete (empty reply)"
+                     :else "complete")]
     (progress "updating index and log")
     (index/regenerate-index context)
-    (scaffold/append-log context
-                         {:date (entry-date opts),
-                          :op "ingest",
-                          :title (basename abs),
-                          :details (concat [(str "source: file:" abs)]
-                                           (map #(str "created: " %) created)
-                                           (map #(str "updated: " %) updated))})
+    (scaffold/append-log
+      context
+      {:date (entry-date opts),
+       :op "ingest",
+       :title (basename abs),
+       :details (concat [(str "source: file:" abs) (str "status: " status)]
+                        (map #(str "created: " %) created)
+                        (map #(str "updated: " %) updated)
+                        (when remaining [(str "remaining: " remaining)]))})
     {:created created,
      :updated updated,
      :final-text (:final-text result),
      :rounds (:rounds result),
-     :stopped (:stopped result)}))
+     :stopped (if empty-reply? :empty-reply (:stopped result)),
+     :remaining remaining}))
 
 ;;;; Query
 
@@ -215,6 +291,7 @@
                   :tools (tools/tool-schemas :query),
                   :execute-tool (tools/make-execute-tool context state),
                   :max-rounds (max-rounds context opts),
+                  :max-tokens (max-tokens context),
                   :on-event (on-event-fn context)})
         answer (:final-text result)
         saved (when (and (:save? opts) (not (str/blank? answer)))
@@ -243,5 +320,6 @@
                   :tools (tools/tool-schemas :query),
                   :execute-tool (tools/make-execute-tool context state),
                   :max-rounds (max-rounds context opts),
+                  :max-tokens (max-tokens context),
                   :on-event (on-event-fn context)})]
     {:report (:final-text result)}))

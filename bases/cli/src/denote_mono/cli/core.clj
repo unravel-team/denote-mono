@@ -466,6 +466,7 @@ Commands:
   [[nil "--save" "File the answer back as a wiki note (query)"]
    [nil "--deep" "Add an LLM review pass (lint)"]
    [nil "--fix" "Repair what can be repaired (lint)"]
+   [nil "--fresh" "Ignore previous ingests of the same source (ingest)"]
    [nil "--model MODEL" "Override the configured LLM model"]
    [nil "--max-rounds N" "Cap agentic tool rounds" :parse-fn parse-long]])
 
@@ -722,19 +723,32 @@ Commands:
         (case subcommand
           "ingest" (if-let [source (first rest-args)]
                      (let [{:keys [created updated final-text rounds stopped]}
-                             (llm-wiki/ingest context source llm-opts)]
-                       (if (= stopped :max-rounds)
-                         {:exit (exit-codes :tool),
-                          :out (str "LLM stopped after "
-                                    rounds
-                                    " rounds without finishing")}
-                         {:exit (exit-codes :success),
-                          :out (str/join "\n"
-                                         (concat
-                                           (map #(str "Created: " %) created)
-                                           (map #(str "Updated: " %) updated)
-                                           (when-not (str/blank? final-text)
-                                             [final-text])))}))
+                             (llm-wiki/ingest context
+                                              source
+                                              (assoc llm-opts
+                                                :fresh? (:fresh options)))]
+                       (cond (= stopped :max-rounds)
+                               {:exit (exit-codes :tool),
+                                :out (str "LLM stopped after "
+                                          rounds
+                                          " rounds without finishing."
+                                          " Partial progress is saved in"
+                                            " the wiki; re-run the same"
+                                          " command to continue from the"
+                                            " handoff note.")}
+                             (= stopped :empty-reply)
+                               {:exit (exit-codes :tool),
+                                :out (str "The model returned an empty"
+                                          " reply; nothing was ingested."
+                                          " Re-run to try again.")}
+                             :else {:exit (exit-codes :success),
+                                    :out (str/join
+                                           "\n"
+                                           (concat
+                                             (map #(str "Created: " %) created)
+                                             (map #(str "Updated: " %) updated)
+                                             (when-not (str/blank? final-text)
+                                               [final-text])))}))
                      {:exit (exit-codes :usage),
                       :out "Usage: denote llm-wiki ingest FILE"})
           "query"
@@ -743,12 +757,16 @@ Commands:
                       (llm-wiki/query context
                                       question
                                       (assoc llm-opts :save? (:save options)))]
-                (if (= stopped :max-rounds)
-                  {:exit (exit-codes :tool),
-                   :out "LLM stopped without an answer"}
-                  {:exit (exit-codes :success),
-                   :out (str answer
-                             (when saved-path (str "\nSaved: " saved-path)))}))
+                (cond (= stopped :max-rounds) {:exit (exit-codes :tool),
+                                               :out
+                                               "LLM stopped without an answer"}
+                      (str/blank? answer)
+                        {:exit (exit-codes :tool),
+                         :out "The model returned an empty reply; try again."}
+                      :else {:exit (exit-codes :success),
+                             :out (str answer
+                                       (when saved-path
+                                         (str "\nSaved: " saved-path)))}))
               {:exit (exit-codes :usage),
                :out "Usage: denote llm-wiki query QUESTION"})
           "lint" (handle-llm-wiki-lint context options)

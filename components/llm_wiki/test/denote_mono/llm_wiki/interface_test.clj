@@ -410,6 +410,81 @@
       (is (str/includes? (fs/read-text (wiki-path context "log.md"))
                          "## [2026-06-11] ingest | notes.txt")))))
 
+(deftest ingest-status-and-resume-test
+  (let [context (make-context)
+        source (str (temp-dir) "/notes.txt")
+        _ (spit source "Raw text about alpha and beta.")
+        ingest! (fn [responses opts requests]
+                  (llm-wiki/ingest
+                    (assoc context :llm-complete (scripted responses requests))
+                    source
+                    (merge {:date "2026-06-12"} opts)))]
+    (testing "a finished ingest logs status: complete"
+      (ingest! [(tool-call "c1" "create_note" {:title "Alpha", :body "A."})
+                {:role :assistant, :content "Done."}]
+               {}
+               (atom []))
+      (is (str/includes? (fs/read-text (wiki-path context "log.md"))
+                         "- status: complete\n")))
+    (testing "an exhausted ingest logs incomplete status and a handoff note"
+      (let [requests (atom [])
+            result
+              (ingest!
+                [(tool-call "c2" "create_note" {:title "Beta", :body "B."})
+                 (tool-call "c3" "create_note" {:title "Gamma", :body "G."})
+                 {:role :assistant,
+                  :content "Remaining: cross-link beta\nand gamma."}]
+                {:max-rounds 2}
+                requests)
+            log (fs/read-text (wiki-path context "log.md"))]
+        (is (= :max-rounds (:stopped result)))
+        (is (str/includes? log "- status: incomplete (max-rounds after 2)\n"))
+        (testing "the handoff note is collapsed to one log line"
+          (is (str/includes?
+                log
+                "- remaining: Remaining: cross-link beta and gamma.\n")))
+        (testing "the handoff request drops the dangling tool-call message"
+          (let [handoff-messages (:messages (nth @requests 2))]
+            (is (= :user (:role (last handoff-messages))))
+            (is (not (:tool-calls (last (butlast handoff-messages)))))))))
+    (testing "re-ingesting the same source continues from the handoff"
+      (let [requests (atom [])]
+        (ingest! [{:role :assistant, :content "Continued."}] {} requests)
+        (let [user-message (:content (second (:messages (first @requests))))]
+          (is (str/includes? user-message "ingested before"))
+          (is (str/includes? user-message "incomplete (max-rounds after 2)"))
+          (is (str/includes? user-message "--beta"))
+          (is (str/includes? user-message
+                             "Remaining: cross-link beta and gamma.")))))
+    (testing "--fresh ignores the history"
+      (let [requests (atom [])]
+        (ingest! [{:role :assistant, :content "Fresh."}]
+                 {:fresh? true}
+                 requests)
+        (is (not (str/includes? (:content (second (:messages (first
+                                                               @requests))))
+                                "ingested before")))))
+    (testing "ingest-history reflects the latest entry for the source"
+      (let [history (llm-wiki/ingest-history context source)]
+        (is (= "complete" (:status history)))
+        (is (nil? (:remaining history)))))
+    (testing "ingest-history is nil for never-ingested sources"
+      (is (nil? (llm-wiki/ingest-history context "/nope/other.txt"))))))
+
+(deftest ingest-empty-reply-test
+  (testing "a model reply with no text and no tool calls is not a success"
+    (let [context (make-context)
+          source (str (temp-dir) "/notes.txt")
+          _ (spit source "Raw text.")
+          result (llm-wiki/ingest (assoc context
+                                    :llm-complete (scripted [{:role :assistant,
+                                                              :content nil}]))
+                                  source
+                                  {:date "2026-06-12"})]
+      (is (= :empty-reply (:stopped result)))
+      (is (str/includes? (fs/read-text (wiki-path context "log.md"))
+                         "- status: incomplete (empty reply)\n")))))
+
 (deftest ingest-progress-test
   (testing "ingest narrates the loop through :on-progress"
     (let [context (make-context)

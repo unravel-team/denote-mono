@@ -94,16 +94,32 @@
       (is (= 2 exit))
       (is (str/includes? out "Usage"))))
   (testing "exhausting --max-rounds maps to the tool exit code"
+    (let [harness
+            (assoc *harness*
+              :llm-complete
+                (scripted
+                  [(tool-call "c1" "create_note" {:title "Spin", :body "spin"})
+                   {:role :assistant, :content "Everything remains."}]))
+          {:keys [exit out]} (run-cli harness
+                                      "llm-wiki"
+                                      "ingest" *raw-source*
+                                      "--max-rounds" "1")]
+      (is (= 5 exit))
+      (testing "the failure tells you progress is saved and how to resume"
+        (is (str/includes? out "re-run")))))
+  (testing "an empty model reply is a tool failure, not silent success"
     (let [harness (assoc *harness*
-                    :llm-complete (scripted [(tool-call "c1"
-                                                        "create_note"
-                                                        {:title "Spin",
-                                                         :body "spin"})]))
-          {:keys [exit]} (run-cli harness
-                                  "llm-wiki"
-                                  "ingest" *raw-source*
-                                  "--max-rounds" "1")]
-      (is (= 5 exit)))))
+                    :llm-complete (scripted [{:role :assistant, :content nil}]))
+          {:keys [exit out]} (run-cli harness "llm-wiki" "ingest" *raw-source*)]
+      (is (= 5 exit))
+      (is (str/includes? out "empty reply"))))
+  (testing "--fresh is accepted"
+    (let [harness (assoc *harness*
+                    :llm-complete (scripted [{:role :assistant,
+                                              :content "Done."}]))
+          {:keys [exit]}
+            (run-cli harness "llm-wiki" "ingest" *raw-source* "--fresh")]
+      (is (zero? exit)))))
 
 (deftest ingest-progress
   (let [responses
@@ -143,6 +159,12 @@
       (let [saved (str/trim (subs out (+ (str/index-of out "Saved: ") 7)))]
         (is (str/includes? saved "what-is-alpha"))
         (is (.exists (java.io.File. (str *wiki-root* "/" saved)))))))
+  (testing "an empty answer is a tool failure, not silent success"
+    (let [harness (assoc *harness*
+                    :llm-complete (scripted [{:role :assistant, :content nil}]))
+          {:keys [exit out]} (run-cli harness "llm-wiki" "query" "Anything?")]
+      (is (= 5 exit))
+      (is (str/includes? out "empty reply"))))
   (testing "no QUESTION argument is a usage error"
     (let [{:keys [exit]} (run-cli (assoc *harness* :llm-complete (no-llm))
                                   "llm-wiki"
@@ -206,4 +228,5 @@
   (testing "completions know the command and its options"
     (let [{:keys [out]} (run-cli *harness* "completions" "bash")]
       (is (str/includes? out "llm-wiki"))
-      (is (str/includes? out "--deep")))))
+      (is (str/includes? out "--deep"))
+      (is (str/includes? out "--fresh")))))
