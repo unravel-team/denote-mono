@@ -75,3 +75,29 @@ native: build ## Build a native binary with GraalVM native-image
 .PHONY: clean
 clean: ## Delete generated artifacts
 	rm -rf target/ .cpcache/ projects/*/target
+
+# The released version lives in the denote-cli project's :uberjar alias
+# (:major-version / :minor-version); the patch component is the git
+# revision count computed at build time (see build.clj). The release
+# targets bump the stored pair and commit the bump as its own jj change,
+# stepping off any in-progress working copy first.
+VERSION_DEPS := projects/denote-cli/deps.edn
+
+define commit_version_bump
+	if [ -n "$$(jj diff --summary)" ] || [ -n "$$(jj log -r @ --no-graph -T description)" ]; then jj new; fi; \
+	perl -pi -e "s/:major-version \d+/:major-version $(1)/; s/:minor-version \d+/:minor-version $(2)/" $(VERSION_DEPS); \
+	jj desc -m "chore(release): bump version to $(1).$(2)"; \
+	jj new; \
+	echo "Version is now $(1).$(2)"
+endef
+
+.PHONY: release-minor
+release-minor: ## Bump the minor version and commit the bump
+	@major=$$(perl -ne 'print $$1 if /:major-version (\d+)/' $(VERSION_DEPS)); \
+	minor=$$(perl -ne 'print $$1 if /:minor-version (\d+)/' $(VERSION_DEPS)); \
+	$(call commit_version_bump,$$major,$$((minor + 1)))
+
+.PHONY: release-major
+release-major: ## Bump the major version (minor resets to 0) and commit the bump
+	@major=$$(perl -ne 'print $$1 if /:major-version (\d+)/' $(VERSION_DEPS)); \
+	$(call commit_version_bump,$$((major + 1)),0)
