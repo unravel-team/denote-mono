@@ -143,12 +143,15 @@ denote find first                 # free-text match on the filename
 denote find --keyword clojure --sort modified
 denote find --json | jq .         # JSON-lines for scripting
 denote find --print0 | xargs -0 ls -l
+denote find --print0 --absolute ==1=2 | xargs -0 denote llm-wiki ingest
 ```
 
 Filters: `--match REGEX --keyword KW --signature SIG --title REGEX
 --id ID`; sort keys: `identifier title keywords signature modified
-random`. On a terminal with fzf installed the results open in fzf: Enter
-opens the selection in `$EDITOR`, Ctrl-P prints it. Piped or
+random`. Paths print relative to the silo root; `--absolute` prints
+absolute paths, which other commands can consume from any directory. On
+a terminal with fzf installed the results open in fzf: Enter opens the
+selection in `$EDITOR`, Ctrl-P prints it. Piped or
 `--json/--edn/--print0` output is always plain.
 
 ### Search note contents
@@ -270,7 +273,7 @@ denote COMMAND --help         Per-command usage and options
 
 find [QUERY]     Find notes (--match --keyword --signature --title --id;
                  --sort identifier|title|keywords|signature|modified|random;
-                 output: --json --edn --print0)
+                 output: --json --edn --print0 --absolute)
 grep QUERY       Regex search of note contents
 backlinks ID|F   Notes linking to the given note
 links FILE_OR_ID Outgoing denote: links of a note

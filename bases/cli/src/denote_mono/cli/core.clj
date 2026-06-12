@@ -41,7 +41,8 @@ Global options:
 
 Commands:
   find [QUERY]     Find notes (filters: --match --keyword --signature
-                   --title --id; output: --sort --json --edn --print0).
+                   --title --id; output: --sort --json --edn --print0
+                   --absolute).
                    On a terminal fzf selects interactively: Enter opens
                    the selection in $EDITOR, Ctrl-P prints it instead
   grep QUERY       Search note contents (rg-accelerated when available).
@@ -92,7 +93,8 @@ Commands:
    [nil "--id ID" "Filter by identifier"]
    [nil "--sort KEY" "Sort key" :default "identifier"]
    [nil "--json" "JSON-lines output"] [nil "--edn" "EDN output"]
-   [nil "--print0" "NUL-delimited output"]])
+   [nil "--print0" "NUL-delimited output"]
+   [nil "--absolute" "Print absolute paths"]])
 
 (def ^:private rename-options
   [[nil "--title TITLE" "New title; empty string removes"]
@@ -133,11 +135,13 @@ Commands:
      :tty? tty?}))
 
 (defn- render-notes
-  [notes {:keys [json edn print0]}]
-  (cond json (str/join "\n" (map #(json/write-str (search/note->wire %)) notes))
-        edn (str/join "\n" (map pr-str notes))
-        print0 (str/join "\u0000" (map :relative-path notes))
-        :else (str/join "\n" (map :relative-path notes))))
+  [notes {:keys [json edn print0 absolute]}]
+  (let [path-key (if absolute :path :relative-path)]
+    (cond json (str/join "\n"
+                         (map #(json/write-str (search/note->wire %)) notes))
+          edn (str/join "\n" (map pr-str notes))
+          print0 (str/join "\u0000" (map path-key notes))
+          :else (str/join "\n" (map path-key notes)))))
 
 (defn- interactive-tty?
   "Best-effort check that this process is attached to an interactive

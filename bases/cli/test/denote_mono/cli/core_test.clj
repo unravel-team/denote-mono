@@ -106,6 +106,20 @@
   (testing "keyword filter"
     (let [{:keys [out]} (run-cli "find" "--keyword" "clojure")]
       (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
+  (testing "--absolute prints absolute paths"
+    ;; Canonical root because --absolute prints canonicalized paths,
+    ;; which differ under macOS's /var -> /private/var symlink.
+    (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+          {:keys [exit out]} (run-cli "find" "alpha" "--absolute")]
+      (is (zero? exit))
+      (is (= [(str root "/20240101T000000--alpha__clojure.org")]
+             (str/split-lines out)))))
+  (testing "--print0 emits NUL-delimited paths, combinable with --absolute"
+    (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+          {:keys [out]} (run-cli "find" "--print0" "--absolute")]
+      (is (= [(str root "/20240101T000000--alpha__clojure.org")
+              (str root "/20240102T000000--beta__notes.org")]
+             (str/split out #"\u0000")))))
   (testing "--json emits parseable note records"
     (let [{:keys [out]} (run-cli "find" "--json" "--id" "20240101T000000")
           parsed (json/read-str out :key-fn keyword)]
