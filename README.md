@@ -225,8 +225,12 @@ model).
 ```sh
 export ANTHROPIC_API_KEY=...      # or configure :llm in config.edn
 
-# index any file; the source itself is never touched
+# index any files; the sources themselves are never touched
 denote llm-wiki ingest ~/notes/lecture-transcript.txt
+denote llm-wiki ingest chapter-1.md chapter-2.md chapter-3.md
+
+# pipe a note query into a batch ingest
+denote find --print0 --absolute ==1=2 | xargs -0 denote llm-wiki ingest
 
 # ask questions; --save files good answers back as wiki notes
 denote llm-wiki query "How does X relate to Y?"
@@ -239,10 +243,15 @@ denote llm-wiki lint --fix
 denote llm-wiki lint --deep
 ```
 
-On a terminal, `ingest` narrates its progress to stderr as the model
-works (`round 2: creating note: ...`); stdout stays clean for the final
-report. `--model` and `--max-rounds` override the configured values per
-run.
+Several sources ingest sequentially, each through its own conversation;
+all paths are validated up front, so a typo costs no API calls. With
+more than one source the report labels each block with its path, and
+the run exits non-zero if any source was left incomplete — re-run the
+command and the finished sources are cheap no-ops while the unfinished
+ones resume. On a terminal, `ingest` narrates its progress to stderr as
+the model works (`round 2: creating note: ...`); stdout stays clean for
+the final report. `--model` and `--max-rounds` override the configured
+values per run.
 
 Ingestion is resumable. Every ingest writes a `status:` line to `log.md`
 (`complete`, or `incomplete (max-rounds after N)`); when a run exhausts
@@ -289,7 +298,7 @@ seq list|tree [SEQ] [--depth N]
 seq convert FILE... --to SCHEME [--dry-run --yes]
 seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
 seq as-parent FILE
-llm-wiki ingest FILE      Distill a source into the LLM wiki silo;
+llm-wiki ingest FILE...   Distill sources into the LLM wiki silo;
                           re-running continues an interrupted ingest
                           (--fresh starts over)
 llm-wiki query QUESTION   Answer from the wiki (--save files it back)

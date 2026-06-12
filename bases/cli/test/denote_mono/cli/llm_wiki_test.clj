@@ -121,6 +121,52 @@
             (run-cli harness "llm-wiki" "ingest" *raw-source* "--fresh")]
       (is (zero? exit)))))
 
+(deftest ingest-multiple-sources
+  (let [source2 (str (temp-dir "denote-llm-wiki-src2") "/second.txt")]
+    (spit source2 "Second source text.")
+    (testing "several FILE arguments ingest sequentially, labeled per source"
+      (let [harness
+              (assoc *harness*
+                :llm-complete
+                  (scripted
+                    [(tool-call "c1" "create_note" {:title "One", :body "one"})
+                     {:role :assistant, :content "Did one."}
+                     (tool-call "c2" "create_note" {:title "Two", :body "two"})
+                     {:role :assistant, :content "Did two."}]))
+            {:keys [exit out]}
+              (run-cli harness "llm-wiki" "ingest" *raw-source* source2)]
+        (is (zero? exit))
+        (is (str/includes? out *raw-source*))
+        (is (str/includes? out source2))
+        (is (str/includes? out "Did one."))
+        (is (str/includes? out "Did two."))))
+    (testing "one bad source fails the batch before any LLM call"
+      (let [{:keys [exit]} (run-cli (assoc *harness* :llm-complete (no-llm))
+                                    "llm-wiki"
+                                    "ingest"
+                                    *raw-source*
+                                    "/nope/missing.txt")]
+        (is (= 3 exit))))
+    (testing "an exhausted source fails the batch; later sources still run"
+      (let [harness
+              (assoc *harness*
+                :llm-complete
+                  (scripted
+                    [(tool-call "c1" "create_note" {:title "Spin", :body "s"})
+                     ;; handoff note for the exhausted first source
+                     {:role :assistant, :content "More to do."}
+                     {:role :assistant, :content "Second done."}]))
+            {:keys [exit out]} (run-cli harness
+                                        "llm-wiki"
+                                        "ingest"
+                                        *raw-source*
+                                        source2
+                                        "--max-rounds"
+                                        "1")]
+        (is (= 5 exit))
+        (is (str/includes? out "re-run"))
+        (is (str/includes? out "Second done."))))))
+
 (deftest ingest-progress
   (let [responses
           [(tool-call "c1" "create_note" {:title "Alpha", :body "Body."})

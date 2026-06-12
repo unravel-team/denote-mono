@@ -23,6 +23,8 @@
 
 (defn make-execute-tool [context state] (tools/make-execute-tool context state))
 
+(defn validate-source! [source-path] (core/validate-source! source-path))
+
 (defn ingest [context source-path opts] (core/ingest context source-path opts))
 
 (defn query [context question opts] (core/query context question opts))

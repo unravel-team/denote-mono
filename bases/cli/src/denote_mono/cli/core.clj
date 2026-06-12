@@ -61,7 +61,7 @@ Commands:
   seq convert FILE... --to SCHEME [--dry-run --yes]
   seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
   seq as-parent FILE [--dry-run]
-  llm-wiki ingest FILE     Distill a source file into the LLM wiki
+  llm-wiki ingest FILE...  Distill source files into the LLM wiki
   llm-wiki query QUESTION  Answer a question from the LLM wiki (--save)
   llm-wiki lint            Check LLM wiki health (--fix --deep)
   silo list        List configured silos
@@ -502,7 +502,7 @@ Commands:
     :description "Create a note",
     :options new-options}
    {:name "llm-wiki",
-    :usage "llm-wiki ingest FILE | query QUESTION | lint [OPTIONS]",
+    :usage "llm-wiki ingest FILE... | query QUESTION | lint [OPTIONS]",
     :description "LLM-maintained wiki operations",
     :options llm-wiki-options,
     :subcommands ["ingest" "lint" "query"]}
@@ -715,6 +715,49 @@ Commands:
       {:exit (exit-codes :success),
        :out (str/join "\n" (concat lines ["Wiki OK"]))})))
 
+(defn- ingest-source
+  "Ingest one source and render the outcome as
+  {:failed? BOOL :lines [STR]}."
+  [context options llm-opts source]
+  (let [{:keys [created updated final-text rounds stopped]}
+          (llm-wiki/ingest context
+                           source
+                           (assoc llm-opts :fresh? (:fresh options)))]
+    (cond (= stopped :max-rounds)
+            {:failed? true,
+             :lines [(str "LLM stopped after "
+                          rounds
+                          " rounds without finishing. Partial progress is"
+                          " saved in the wiki; re-run the same command to"
+                          " continue from the handoff note.")]}
+          (= stopped :empty-reply)
+            {:failed? true,
+             :lines [(str "The model returned an empty reply; nothing was"
+                          " ingested. Re-run to try again.")]}
+          :else {:failed? false,
+                 :lines (concat (map #(str "Created: " %) created)
+                                (map #(str "Updated: " %) updated)
+                                (when-not (str/blank? final-text)
+                                  [final-text]))})))
+
+(defn- handle-ingest
+  "Ingest SOURCES sequentially, each through its own tool loop. All
+  sources are validated up front so a bad path fails the batch before
+  the first LLM call. Any incomplete source fails the whole run."
+  [context options llm-opts sources]
+  (run! llm-wiki/validate-source! sources)
+  (let [results (mapv #(ingest-source context options llm-opts %) sources)
+        multi? (< 1 (count sources))
+        blocks (map (fn [source {:keys [lines]}]
+                      (str/join
+                        "\n"
+                        (if multi? (cons (str source ":") lines) lines)))
+                 sources
+                 results)]
+    {:exit
+     (if (some :failed? results) (exit-codes :tool) (exit-codes :success)),
+     :out (str/join "\n\n" blocks)}))
+
 (defn- handle-llm-wiki
   [global-opts harness args]
   (let [{:keys [options arguments errors]}
@@ -725,36 +768,10 @@ Commands:
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
       (let [context (make-llm-wiki-context global-opts harness)]
         (case subcommand
-          "ingest" (if-let [source (first rest-args)]
-                     (let [{:keys [created updated final-text rounds stopped]}
-                             (llm-wiki/ingest context
-                                              source
-                                              (assoc llm-opts
-                                                :fresh? (:fresh options)))]
-                       (cond (= stopped :max-rounds)
-                               {:exit (exit-codes :tool),
-                                :out (str "LLM stopped after "
-                                          rounds
-                                          " rounds without finishing."
-                                          " Partial progress is saved in"
-                                            " the wiki; re-run the same"
-                                          " command to continue from the"
-                                            " handoff note.")}
-                             (= stopped :empty-reply)
-                               {:exit (exit-codes :tool),
-                                :out (str "The model returned an empty"
-                                          " reply; nothing was ingested."
-                                          " Re-run to try again.")}
-                             :else {:exit (exit-codes :success),
-                                    :out (str/join
-                                           "\n"
-                                           (concat
-                                             (map #(str "Created: " %) created)
-                                             (map #(str "Updated: " %) updated)
-                                             (when-not (str/blank? final-text)
-                                               [final-text])))}))
+          "ingest" (if (seq rest-args)
+                     (handle-ingest context options llm-opts rest-args)
                      {:exit (exit-codes :usage),
-                      :out "Usage: denote llm-wiki ingest FILE"})
+                      :out "Usage: denote llm-wiki ingest FILE..."})
           "query"
             (if-let [question (first rest-args)]
               (let [{:keys [answer saved-path stopped]}
@@ -776,7 +793,7 @@ Commands:
           "lint" (handle-llm-wiki-lint context options)
           {:exit (exit-codes :usage),
            :out
-           "Usage: denote llm-wiki ingest FILE | query QUESTION | lint"})))))
+           "Usage: denote llm-wiki ingest FILE... | query QUESTION | lint"})))))
 
 (defn- handle-silo
   [global-opts {:keys [env]} args]

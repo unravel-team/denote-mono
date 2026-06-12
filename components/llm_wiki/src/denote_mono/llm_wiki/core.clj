@@ -151,7 +151,10 @@
        " what is missing, and finish the cross-links. Prefer update_note"
        " over creating duplicate pages."))
 
-(defn- validate-source!
+(defn validate-source!
+  "Reject a missing, directory, or non-text ingest source. Callers with
+  several sources validate all of them before the first LLM call, so a
+  bad path costs nothing."
   [source-path]
   (when-not (fs/exists? source-path)
     (throw (ex-info (str "Source does not exist: " source-path)
