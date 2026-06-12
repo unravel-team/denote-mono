@@ -178,6 +178,13 @@
                       :llm-complete (scripted responses))]
         (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
         (is (str/includes? (str err) "creating note: Alpha"))))
+    (testing "a tty on stderr alone narrates too (stdin piped, e.g. xargs)"
+      (let [err (java.io.StringWriter.)
+            harness (assoc *harness*
+                      :stderr-tty? true
+                      :llm-complete (scripted responses))]
+        (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
+        (is (str/includes? (str err) "creating note: Alpha"))))
     (testing "piped output stays silent"
       (let [err (java.io.StringWriter.)
             harness (assoc *harness* :llm-complete (scripted responses))]

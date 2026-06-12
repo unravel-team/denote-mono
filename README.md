@@ -248,10 +248,11 @@ all paths are validated up front, so a typo costs no API calls. With
 more than one source the report labels each block with its path, and
 the run exits non-zero if any source was left incomplete — re-run the
 command and the finished sources are cheap no-ops while the unfinished
-ones resume. On a terminal, `ingest` narrates its progress to stderr as
-the model works (`round 2: creating note: ...`); stdout stays clean for
-the final report. `--model` and `--max-rounds` override the configured
-values per run.
+ones resume. `ingest` narrates its progress to stderr as the model works
+(`round 2: creating note: ...`) whenever stderr is a terminal — also in
+the middle of a pipeline such as `xargs`, where stdin is redirected;
+stdout stays clean for the final report. `--model` and `--max-rounds`
+override the configured values per run.
 
 Ingestion is resumable. Every ingest writes a `status:` line to `log.md`
 (`complete`, or `incomplete (max-rounds after N)`); when a run exhausts

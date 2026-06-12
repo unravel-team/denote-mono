@@ -682,9 +682,10 @@ Commands:
 
 (defn- make-llm-wiki-context
   "Like make-context but resolved against llm-wiki silos only; carries the
-  harness's :llm-complete so tests can script the LLM. On a terminal,
-  agentic operations narrate their progress to stderr."
-  [global-opts {:keys [env cwd tty? llm-complete]}]
+  harness's :llm-complete so tests can script the LLM. Agentic operations
+  narrate their progress to stderr whenever a human can see it: on a full
+  terminal, or with just stderr on one (stdin piped, e.g. under xargs)."
+  [global-opts {:keys [env cwd tty? stderr-tty? llm-complete]}]
   (let [cfg (load-validated-config global-opts env)]
     {:config cfg,
      :silo (silo/resolve-llm-wiki-silo cfg
@@ -695,7 +696,9 @@ Commands:
      :cwd cwd,
      :tty? tty?,
      :llm-complete llm-complete,
-     :on-progress (when tty? stderr-progress)}))
+     ;; force: prod passes a delay (the isatty probe forks a shell, so
+     ;; only agentic commands should pay for it); tests pass a boolean.
+     :on-progress (when (or tty? (force stderr-tty?)) stderr-progress)}))
 
 (defn- handle-llm-wiki-lint
   [context options]
@@ -831,6 +834,17 @@ Commands:
       {:exit (exit-codes :usage),
        :out "Usage: denote silo list|path [NAME]|doctor"})))
 
+(defn- stderr-tty?
+  "True when stderr is attached to a terminal, even with stdin/stdout
+  redirected (e.g. under xargs). The JVM has no isatty, so ask the shell
+  about the fd 2 it inherits from this process."
+  []
+  (try (let [builder (doto (ProcessBuilder. ["/bin/sh" "-c" "test -t 2"])
+                       (.redirectError
+                         java.lang.ProcessBuilder$Redirect/INHERIT))]
+         (zero? (.waitFor (.start builder))))
+       (catch Exception _ false)))
+
 (defn run
   "Dispatch ARGS and return {:exit CODE :out STRING}. HARNESS supplies
   :env (map of environment variables) and :cwd, so tests can inject both."
@@ -838,7 +852,8 @@ Commands:
    (run args
         {:env (into {} (System/getenv)),
          :cwd (System/getProperty "user.dir"),
-         :tty? (interactive-tty?)}))
+         :tty? (interactive-tty?),
+         :stderr-tty? (delay (stderr-tty?))}))
   ([args harness]
    (let [{:keys [options arguments errors]}
            (tools-cli/parse-opts args global-options :in-order true)
