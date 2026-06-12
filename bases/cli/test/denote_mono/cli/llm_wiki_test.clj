@@ -59,6 +59,12 @@
 
 (defn- no-llm [] (fn [_request] (throw (ex-info "LLM must not be called" {}))))
 
+(defn- bump-mtime!
+  "Advance PATH's mtime so it no longer matches a recorded ingest."
+  [path]
+  (let [file (java.io.File. ^String path)]
+    (.setLastModified file (+ (.lastModified file) 1000))))
+
 (deftest ingest-command
   (testing "ingest runs the loop and reports created notes"
     (let [harness (assoc *harness*
@@ -81,6 +87,13 @@
           (is (some #{"log.md"} files))))
       (testing "the source is untouched"
         (is (= "Raw source text about alpha." (slurp *raw-source*))))))
+  (testing "re-running an unchanged ingested source is skipped"
+    (let [{:keys [exit out]} (run-cli (assoc *harness* :llm-complete (no-llm))
+                                      "llm-wiki"
+                                      "ingest"
+                                      *raw-source*)]
+      (is (zero? exit))
+      (is (str/includes? out "Skipped"))))
   (testing "missing source fails before any LLM call"
     (let [{:keys [exit]} (run-cli (assoc *harness* :llm-complete (no-llm))
                                   "llm-wiki"
@@ -94,6 +107,7 @@
       (is (= 2 exit))
       (is (str/includes? out "Usage"))))
   (testing "exhausting --max-rounds maps to the tool exit code"
+    (bump-mtime! *raw-source*) ;; else the completed ingest above skips
     (let [harness
             (assoc *harness*
               :llm-complete
@@ -148,6 +162,8 @@
                                     "/nope/missing.txt")]
         (is (= 3 exit))))
     (testing "an exhausted source fails the batch; later sources still run"
+      (bump-mtime! *raw-source*) ;; else the completed ingests above skip
+      (bump-mtime! source2)
       (let [harness
               (assoc *harness*
                 :llm-complete
@@ -179,6 +195,7 @@
         (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
         (is (str/includes? (str err) "creating note: Alpha"))))
     (testing "a tty on stderr alone narrates too (stdin piped, e.g. xargs)"
+      (bump-mtime! *raw-source*) ;; else the completed ingest above skips
       (let [err (java.io.StringWriter.)
             harness (assoc *harness*
                       :stderr-tty? true
@@ -186,6 +203,7 @@
         (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
         (is (str/includes? (str err) "creating note: Alpha"))))
     (testing "piped output stays silent"
+      (bump-mtime! *raw-source*)
       (let [err (java.io.StringWriter.)
             harness (assoc *harness* :llm-complete (scripted responses))]
         (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))

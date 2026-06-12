@@ -728,7 +728,10 @@ Commands:
           (llm-wiki/ingest context
                            source
                            (assoc llm-opts :fresh? (:fresh options)))]
-    (cond (= stopped :max-rounds)
+    (cond (= stopped :skipped)
+            {:failed? false,
+             :lines ["Skipped (complete and unchanged since last ingest)"]}
+          (= stopped :max-rounds)
             {:failed? true,
              :lines [(str "LLM stopped after "
                           rounds

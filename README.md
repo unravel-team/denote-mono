@@ -261,7 +261,15 @@ describing the remaining work, which is logged too. Re-running the same
 `ingest` command then continues instead of starting over: the prompt
 tells the model which pages already exist from that source and what the
 handoff note said. Pass `--fresh` to ignore the history and ingest from
-scratch. The model works through a constrained tool loop: it can list, read,
+scratch.
+
+Ingestion is also idempotent: each entry records the source file's
+mtime, and a source whose latest entry is `complete` and whose file is
+unchanged since is skipped without any LLM call. Re-running a whole
+batch therefore only costs API calls for the sources that are new,
+changed, or unfinished. (Entries written before mtimes were recorded
+skip when the file provably predates the entry's day.) `--fresh`
+overrides the skip too. The model works through a constrained tool loop: it can list, read,
 search, create, and update wiki notes, but filenames, identifiers, and
 sequence numbers are always assigned by denote itself, and
 `index.md`/`log.md` are off-limits to it (ADR 12).

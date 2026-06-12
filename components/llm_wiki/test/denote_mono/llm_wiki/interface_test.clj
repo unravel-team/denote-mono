@@ -72,6 +72,14 @@
 
 (defn- problem-checks [result] (set (map :check (:problems result))))
 
+(defn- bump-mtime!
+  "Advance PATH's mtime so it no longer matches a recorded ingest."
+  [path]
+  (let [file (File. ^String path)]
+    (.setLastModified file (+ (.lastModified file) 1000))))
+
+(defn- no-llm [] (fn [_] (throw (ex-info "LLM must not be called" {}))))
+
 ;;; Scaffold
 
 (deftest scaffold-test
@@ -439,6 +447,7 @@
       (is (str/includes? (fs/read-text (wiki-path context "log.md"))
                          "- status: complete\n")))
     (testing "an exhausted ingest logs incomplete status and a handoff note"
+      (bump-mtime! source) ;; else the complete first ingest would skip it
       (let [requests (atom [])
             result
               (ingest!
@@ -507,6 +516,76 @@
       (is (= 1
              (count (re-seq #"- updated: "
                             (fs/read-text (wiki-path context "log.md")))))))))
+
+(deftest ingest-skip-unchanged-test
+  (let [context (make-context)
+        source (str (temp-dir) "/notes.txt")
+        _ (spit source "Raw text.")
+        ingest! (fn [extra opts]
+                  (llm-wiki/ingest (merge context extra)
+                                   source
+                                   (merge {:date "2026-06-12"} opts)))]
+    (testing "a complete ingest records the source mtime in the log"
+      (ingest! {:llm-complete (scripted [(tool-call "c1"
+                                                    "create_note"
+                                                    {:title "A", :body "A."})
+                                         {:role :assistant, :content "Done."}])}
+               {})
+      (is (re-find #"- source-mtime: \d+\n"
+                   (fs/read-text (wiki-path context "log.md")))))
+    (testing "an unchanged complete source is skipped without an LLM call"
+      (let [messages (atom [])
+            result (ingest! {:llm-complete (no-llm),
+                             :on-progress #(swap! messages conj %)}
+                            {})]
+        (is (= :skipped (:stopped result)))
+        (is (empty? (:created result)))
+        (is (some #(str/includes? % "unchanged") @messages))
+        (testing "and the log gains no new entry"
+          (is (= 1
+                 (count (re-seq #"\] ingest \| "
+                                (fs/read-text (wiki-path context
+                                                         "log.md")))))))))
+    (testing "--fresh overrides the skip"
+      (is (= :done
+             (:stopped (ingest! {:llm-complete (scripted [{:role :assistant,
+                                                           :content "Fresh."}])}
+                                {:fresh? true})))))
+    (testing "a source modified since the ingest is reprocessed"
+      (bump-mtime! source)
+      (is (= :done
+             (:stopped (ingest! {:llm-complete (scripted [{:role :assistant,
+                                                           :content "Again."}])}
+                                {})))))))
+
+(deftest ingest-skip-legacy-entry-test
+  (let [context (make-context)
+        source (str (temp-dir) "/notes.txt")
+        _ (spit source "Raw text.")
+        ;; A complete entry from before source mtimes were recorded.
+        _ (llm-wiki/scaffold context)
+        _ (llm-wiki/append-log context
+                               {:date "2020-06-15",
+                                :op "ingest",
+                                :title "notes.txt",
+                                :details [(str "source: file:"
+                                               (fs/canonical source))
+                                          "status: complete"]})]
+    (testing "a file that provably predates the entry's day is skipped"
+      (.setLastModified (File. source) 1590000000000) ;; 2020-05-20
+      (is (= :skipped
+             (:stopped (llm-wiki/ingest (assoc context :llm-complete (no-llm))
+                                        source
+                                        {:date "2026-06-12"})))))
+    (testing "a file touched on or after the entry's day is reprocessed"
+      (.setLastModified (File. source) 1600000000000) ;; 2020-09-13
+      (is (= :done
+             (:stopped (llm-wiki/ingest (assoc context
+                                          :llm-complete
+                                            (scripted [{:role :assistant,
+                                                        :content "Redone."}]))
+                                        source
+                                        {:date "2026-06-12"})))))))
 
 (deftest ingest-empty-reply-test
   (testing "a model reply with no text and no tool calls is not a success"

@@ -66,7 +66,8 @@
 
 (defn ingest-history
   "The latest log.md ingest entry for SOURCE-PATH, as
-  {:status STR-or-nil :created [REL] :updated [REL] :remaining STR-or-nil}.
+  {:date STR-or-nil :status STR-or-nil :source-mtime STR-or-nil
+   :created [REL] :updated [REL] :remaining STR-or-nil}.
   Nil when the source was never ingested into this wiki."
   [context source-path]
   (let [root (fs/canonical (get-in context [:silo :path]))
@@ -81,7 +82,9 @@
                                 (and (str/includes? entry "] ingest | ")
                                      (re-find source-line entry)))]
         (when-let [entry (last (filter ingest-of-source? entries))]
-          {:status (entry-detail entry "status"),
+          {:date (second (re-find #"^\[(\d{4}-\d{2}-\d{2})\]" entry)),
+           :status (entry-detail entry "status"),
+           :source-mtime (entry-detail entry "source-mtime"),
            :created (entry-details entry "created"),
            :updated (entry-details entry "updated"),
            :remaining (entry-detail entry "remaining")})))))

@@ -11,7 +11,7 @@
             [denote-mono.note.interface :as note]
             [denote-mono.search.interface :as search]
             [denote-mono.sequence.interface :as sequence])
-  (:import (java.time LocalDate)))
+  (:import (java.time Instant LocalDate ZoneId)))
 
 ;;;; Plumbing
 
@@ -151,6 +151,24 @@
        " what is missing, and finish the cross-links. Prefer update_note"
        " over creating duplicate pages."))
 
+(defn- unchanged-since-ingest?
+  "True when HISTORY proves the source at ABS is fully ingested and
+  untouched since: its recorded mtime still matches, or — for entries
+  from before mtimes were recorded — the file's mtime predates the
+  entry's day, so it cannot have changed after that ingest."
+  [{:keys [status source-mtime date]} abs]
+  (boolean (and (= "complete" status)
+                ;; Hinted: reflective calls fail inside the native image.
+                (let [mtime (.toEpochMilli ^Instant (fs/file-mtime abs))]
+                  (if source-mtime
+                    (= mtime (parse-long source-mtime))
+                    (when date
+                      (< mtime
+                         (-> (LocalDate/parse date)
+                             (.atStartOfDay (ZoneId/systemDefault))
+                             .toInstant
+                             .toEpochMilli))))))))
+
 (defn validate-source!
   "Reject a missing, directory, or non-text ingest source. Callers with
   several sources validate all of them before the first LLM call, so a
@@ -166,15 +184,37 @@
     (throw (ex-info (str "Source is not a supported text file: " source-path)
                     {:type :validation, :path source-path}))))
 
+(def ^:private skipped-result
+  {:created [],
+   :updated [],
+   :final-text nil,
+   :rounds 0,
+   :stopped :skipped,
+   :remaining nil})
+
+(declare run-ingest)
+
 (defn ingest
   "Distill SOURCE-PATH into the wiki through the agentic tool loop, then
-  refresh the index and the log. Returns
-  {:created :updated :final-text :rounds :stopped}."
+  refresh the index and the log. A source whose latest log entry is
+  complete and whose file is unchanged since is skipped outright
+  (:stopped :skipped) — no LLM call, no new log entry; :fresh? overrides.
+  Returns {:created :updated :final-text :rounds :stopped :remaining}."
   [context source-path opts]
   (validate-source! source-path)
   (let [abs (fs/canonical source-path)
         progress (progress-fn context)
-        history (when-not (:fresh? opts) (scaffold/ingest-history context abs))
+        history (when-not (:fresh? opts) (scaffold/ingest-history context abs))]
+    (if (and history (unchanged-since-ingest? history abs))
+      (do (progress
+            (str "skipping " (basename abs) " (unchanged since last ingest)"))
+          skipped-result)
+      (run-ingest context abs opts history))))
+
+(defn- run-ingest
+  [context abs opts history]
+  (let [progress (progress-fn context)
+        mtime (.toEpochMilli ^Instant (fs/file-mtime abs))
         _ (scaffold/scaffold context)
         complete (complete-fn context opts)
         state (atom {:created [], :updated [], :default-sources [abs]})
@@ -224,7 +264,11 @@
       {:date (entry-date opts),
        :op "ingest",
        :title (basename abs),
-       :details (concat [(str "source: file:" abs) (str "status: " status)]
+       :details (concat [(str "source: file:" abs) (str "status: " status)
+                         ;; Captured before the run: a file edited while
+                         ;; ingesting will mismatch and reprocess next
+                         ;; time.
+                         (str "source-mtime: " mtime)]
                         (map #(str "created: " %) created)
                         (map #(str "updated: " %) updated)
                         (when remaining [(str "remaining: " remaining)]))})
