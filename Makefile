@@ -34,8 +34,17 @@ check-cljkondo:
 check-zprint:
 	zprint -c $(CLOJURE_SOURCES)
 
+# Loading the CLI entry namespace transitively compiles every brick.
+# Scoped to denote_mono files: dependencies (litellm-clj) warn too, but
+# they are not ours to fix here. Reflection that the JVM tolerates kills
+# the GraalVM native image at runtime, so warnings fail the build.
+.PHONY: check-reflection
+check-reflection:
+	@warnings=$$(clojure -M:dev -e "(set! *warn-on-reflection* true) (require 'denote-mono.cli.core)" 2>&1 >/dev/null | grep "Reflection warning, denote_mono" || true); \
+	if [ -n "$$warnings" ]; then echo "$$warnings"; exit 1; fi
+
 .PHONY: check
-check: check-tagref check-cljkondo check-zprint ## Check lint/static analysis/formatting
+check: check-tagref check-cljkondo check-zprint check-reflection ## Check lint/static analysis/formatting
 	@echo "All checks passed!"
 
 .PHONY: format

@@ -12,7 +12,7 @@
               (reify
                 java.util.function.IntConsumer
                   (accept [_ cp]
-                    (.appendCodePoint sb (if (<= 33 cp 126) cp 32)))))
+                    (.appendCodePoint sb (int (if (<= 33 cp 126) cp 32))))))
     (str sb)))
 
 (defn hyphenate

@@ -158,7 +158,9 @@ Commands:
                                                      (into-array Class []))
                                          (catch NoSuchMethodException _ nil))]
                     (if is-terminal
-                      (.invoke is-terminal console (object-array 0))
+                      (.invoke ^java.lang.reflect.Method is-terminal
+                               console
+                               (object-array 0))
                       true))))))
 
 (def ^:private print-key
