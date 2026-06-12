@@ -28,6 +28,8 @@
       "- Every note ends with a `## Sources` section of `[name](file:/abs/path)`\n"
     "  links back to the raw sources. Never remove them.\n"
       "- Cross-link densely with `[title](denote:ID)` links.\n"
+    "- Link only to identifiers that exist. Never write placeholder link\n"
+      "  targets; create a page first, then link to it.\n"
     "- Pages are evergreen: update existing pages instead of duplicating\n"
       "  topics.\n\n"
     "## Machine-maintained files\n\n"

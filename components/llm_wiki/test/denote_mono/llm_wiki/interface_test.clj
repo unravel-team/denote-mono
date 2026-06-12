@@ -335,9 +335,11 @@
                   :sig "1",
                   :title "Dupe",
                   :keywords [],
-                  :body (str
-                          "Links nowhere real: [x](denote:19990101T000000)."
-                          "\n\n## Sources\n\n- [gone](file:/nope/gone.txt)\n")})
+                  :body
+                  (str "Links nowhere real: [x](denote:19990101T000000)"
+                         " and [cfg](PLACEHOLDER_CONFIG), and an allowed"
+                       " [url](https://example.com)."
+                         "\n\n## Sources\n\n- [gone](file:/nope/gone.txt)\n")})
     (write-note!
       context
       {:id "20240105T000000",
@@ -363,7 +365,13 @@
       (is (contains? checks :invalid-sequence))
       (is (contains? checks :duplicate-sequence))
       (is (contains? checks :stale-index))
-      (is (contains? checks :missing-scaffold)))))
+      (is (contains? checks :missing-scaffold))
+      (testing "placeholder-style link targets are flagged"
+        (let [suspicious (filter #(= :suspicious-link (:check %))
+                           (:problems (llm-wiki/lint context {})))]
+          (is (= 1 (count suspicious)))
+          (is (str/includes? (:detail (first suspicious))
+                             "PLACEHOLDER_CONFIG")))))))
 
 (deftest lint-fix-test
   (let [context (clean-wiki-context)]
@@ -403,7 +411,11 @@
     (testing "prompt carries source text and schema conventions"
       (let [{:keys [messages]} (first @requests)]
         (is (str/includes? (:content (second messages)) "Raw source text"))
-        (is (str/includes? (:content (first messages)) "Sources"))))
+        (is (str/includes? (:content (first messages)) "Sources"))
+        (testing "and forbids placeholder links and piecemeal updates"
+          (is (str/includes? (:content (first messages)) "placeholder"))
+          (is (str/includes? (:content (first messages))
+                             "single update_note")))))
     (testing "index and log are updated"
       (is (str/includes? (fs/read-text (wiki-path context "index.md"))
                          "denote:"))
@@ -470,6 +482,31 @@
         (is (nil? (:remaining history)))))
     (testing "ingest-history is nil for never-ingested sources"
       (is (nil? (llm-wiki/ingest-history context "/nope/other.txt"))))))
+
+(deftest ingest-dedupes-log-test
+  (testing "repeated updates of one note collapse to one log line"
+    (let [context (make-context)
+          source (str (temp-dir) "/notes.txt")
+          _ (spit source "Raw text.")
+          _ (write-note! context
+                         {:id "20240101T000000",
+                          :sig "1",
+                          :title "Alpha",
+                          :keywords [],
+                          :body "Old body.\n"})
+          relative "20240101T000000==1--alpha.md"
+          context
+            (assoc context
+              :llm-complete
+                (scripted
+                  [(tool-call "c1" "update_note" {:path relative, :body "One."})
+                   (tool-call "c2" "update_note" {:path relative, :body "Two."})
+                   {:role :assistant, :content "Done."}]))
+          result (llm-wiki/ingest context source {:date "2026-06-12"})]
+      (is (= [relative] (:updated result)))
+      (is (= 1
+             (count (re-seq #"- updated: "
+                            (fs/read-text (wiki-path context "log.md")))))))))
 
 (deftest ingest-empty-reply-test
   (testing "a model reply with no text and no tool calls is not a success"

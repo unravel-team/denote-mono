@@ -97,12 +97,17 @@
 
 (def ^:private ingest-instructions
   (str "You maintain a personal wiki distilled from raw sources. Consult"
-       " the index below, read overlapping pages with the tools, UPDATE"
-         " existing pages that the new source extends, and CREATE pages for"
-       " new topics. Aim for 10-15 focused pages for a substantial source,"
-         " fewer for a small one. Place new pages with parent_sequence so"
-       " children refine their parents. Cross-link related pages in both"
-         " directions. Finish with a one-paragraph report of what you did."))
+         " the index below, read overlapping pages with the tools, UPDATE"
+       " existing pages that the new source extends, and CREATE pages for"
+         " new topics. Aim for 10-15 focused pages for a substantial source,"
+       " fewer for a small one. Place new pages with parent_sequence so"
+         " children refine their parents. Cross-link related pages in both"
+       " directions. Linking rules: never invent link targets and never"
+         " write placeholder links — create_note returns the new page's"
+       " identifier, so create a page first and link to it afterwards, or"
+         " add the link in a later update. Batch every change to a note into"
+       " a single update_note call instead of editing it repeatedly."
+         " Finish with a one-paragraph report of what you did."))
 
 (def ^:private handoff-prompt
   (str "Your round budget is exhausted. Reply with a short,"
@@ -191,6 +196,8 @@
                   :max-tokens (max-tokens context),
                   :on-event (on-event-fn context)})
         {:keys [created updated]} @state
+        created (vec (distinct created))
+        updated (vec (distinct updated))
         incomplete? (= :max-rounds (:stopped result))
         ;; A reply with no text, no tool calls, and no work done is a
         ;; model failure (e.g. the whole token budget spent on hidden

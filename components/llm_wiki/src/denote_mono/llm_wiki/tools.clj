@@ -51,12 +51,14 @@
   {:type "function",
    :function
    {:name "create_note",
-    :description (str
-                   "Create a new wiki note. The system assigns the filename,"
-                   " identifier, and sequence; never invent them. The body is"
-                     " markdown without front matter. Link other notes as"
-                   " [title](denote:IDENTIFIER). A Sources section is appended"
-                     " automatically."),
+    :description
+    (str "Create a new wiki note. The system assigns the filename,"
+           " identifier, and sequence; never invent them. The body is"
+         " markdown without front matter. Link other notes as"
+           " [title](denote:IDENTIFIER) — only to identifiers that"
+         " already exist; never write placeholder targets. This"
+           " tool returns the new note's identifier so later pages"
+         " can link to it. A Sources section is appended" " automatically."),
     :parameters
     {:type "object",
      :properties
@@ -87,7 +89,9 @@
                 " preserved and existing source links are kept; the Sources"
                   " section is maintained automatically. The body is markdown"
                 " without front matter. Link other notes as"
-                  " [title](denote:IDENTIFIER)."),
+                  " [title](denote:IDENTIFIER); never write placeholder"
+                " targets. Batch all changes to a note into one call instead"
+                  " of updating it repeatedly."),
               :parameters
               {:type "object",
                :properties

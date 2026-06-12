@@ -57,6 +57,28 @@
                              (str "source not on disk: " target)))))))
     notes))
 
+(def ^:private md-link-pattern #"\[[^\]]*\]\(([^)]+)\)")
+
+(defn- allowed-link-target?
+  [target]
+  (let [target (str/trim target)]
+    (some #(str/starts-with? target %)
+          ["denote:" "file:" "http://" "https://" "mailto:" "#"])))
+
+(defn- suspicious-link-problems
+  "Markdown links whose target is neither a denote: link, a file: link,
+  nor a URL — placeholders the model invented, typically."
+  [notes texts]
+  (for [{:keys [path relative-path]} notes
+        :let [text (texts path)]
+        :when text
+        target (distinct (map second (re-seq md-link-pattern text)))
+        :when (not (allowed-link-target? target))]
+    (problem :suspicious-link
+             relative-path
+             (str "link target is neither denote:, file:, nor a URL: "
+                  target))))
+
 (defn- orphan-problems
   [notes texts]
   (let [outgoing (into {}
@@ -143,6 +165,7 @@
                                (concat (non-denote-file-problems root config)
                                        (broken-link-problems notes texts ids)
                                        (source-problems notes texts)
+                                       (suspicious-link-problems notes texts)
                                        (orphan-problems notes texts)
                                        (sequence-problems notes scheme)
                                        (duplicate-sequence-problems notes)
