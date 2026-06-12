@@ -140,7 +140,9 @@ Commands:
     (cond json (str/join "\n"
                          (map #(json/write-str (search/note->wire %)) notes))
           edn (str/join "\n" (map pr-str notes))
-          print0 (str/join "\u0000" (map path-key notes))
+          ;; NUL terminates EVERY record (find -print0 semantics), so
+          ;; consumers like xargs -0 never see a stray trailing byte.
+          print0 (apply str (map #(str (path-key %) "\u0000") notes))
           :else (str/join "\n" (map path-key notes)))))
 
 (defn- interactive-tty?
@@ -875,9 +877,19 @@ Commands:
                       (str "\nConfigured silos: "
                            (str/join ", " (map name silos)))))})))))
 
+(defn- print-result
+  "Print OUT for EXIT: stdout on success, stderr otherwise. Output
+  ending in NUL carries its own record terminators (--print0), so no
+  newline is appended to it."
+  [{:keys [exit out]}]
+  (when-not (str/blank? out)
+    (let [emit (if (str/ends-with? out "\u0000")
+                 (fn [s] (print s) (flush))
+                 println)]
+      (if (zero? exit) (emit out) (binding [*out* *err*] (emit out))))))
+
 (defn -main
   [& args]
-  (let [{:keys [exit out]} (run args)]
-    (when-not (str/blank? out)
-      (if (zero? exit) (println out) (binding [*out* *err*] (println out))))
+  (let [{:keys [exit], :as result} (run args)]
+    (print-result result)
     (System/exit exit)))

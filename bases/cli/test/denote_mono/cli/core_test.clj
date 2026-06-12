@@ -114,12 +114,21 @@
       (is (zero? exit))
       (is (= [(str root "/20240101T000000--alpha__clojure.org")]
              (str/split-lines out)))))
-  (testing "--print0 emits NUL-delimited paths, combinable with --absolute"
+  (testing "--print0 emits NUL-terminated paths, combinable with --absolute"
     (let [root (.getCanonicalPath (java.io.File. *notes-root*))
           {:keys [out]} (run-cli "find" "--print0" "--absolute")]
       (is (= [(str root "/20240101T000000--alpha__clojure.org")
               (str root "/20240102T000000--beta__notes.org")]
-             (str/split out #"\u0000")))))
+             (str/split out #"\u0000")))
+      ;; NUL after EVERY record (find -print0 semantics): xargs -0 must
+      ;; never see a printer-appended newline glued to the last path.
+      (is (str/ends-with? out "\u0000"))))
+  (testing "the printer appends no newline to NUL-terminated output"
+    (is (= "a\u0000b\u0000"
+           (with-out-str (#'cli/print-result
+                          {:exit 0, :out "a\u0000b\u0000"}))))
+    (is (= "plain\n"
+           (with-out-str (#'cli/print-result {:exit 0, :out "plain"})))))
   (testing "--json emits parseable note records"
     (let [{:keys [out]} (run-cli "find" "--json" "--id" "20240101T000000")
           parsed (json/read-str out :key-fn keyword)]
