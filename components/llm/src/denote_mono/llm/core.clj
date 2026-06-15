@@ -1,97 +1,120 @@
 (ns denote-mono.llm.core
-  "LLM access. Wraps litellm-clj behind a provider-agnostic complete-fn
-  and a manual tool-calling loop. All wire concerns live here: callers
-  hand over plain Clojure tool executors and never see JSON."
+  "denote-mono's LLM access, implemented over DSCloj. Exposes a tool-using
+  agent loop (DSCloj's ReAct) and chain-of-thought, plus provider
+  registration from denote-mono config. Callers hand over plain Clojure tool
+  executors and OpenAI-style tool schemas; the conversion to DSCloj's tool
+  maps lives here."
   (:require [clojure.data.json :as json]
-            [litellm.core :as litellm]))
+            [dscloj.core :as dscloj]))
 
-(defn make-complete-fn
-  "Build (fn [request-map] response-map) bound to LLM-CONFIG
+(def ^:private provider-key
+  "Stable DSCloj registry key for denote-mono's single active provider.
+  Re-registered (overwritten) on each operation, which is safe for a
+  one-shot CLI."
+  :denote-mono)
+
+(defn register-provider!
+  "Register LLM-CONFIG with DSCloj and return the provider key to pass to
+  run-tool-loop / chain-of-thought. LLM-CONFIG:
   {:provider KW :model STR :api-key STR :api-base STR-or-nil
-  :timeout-ms N-or-nil}. Provider/HTTP failures are rethrown as ex-info
-  {:type :tool}."
+  :timeout-ms N-or-nil}. The timeout lives in DSCloj's :config map, where
+  the providers read it."
   [{:keys [provider model api-key api-base timeout-ms]}]
-  (fn [request]
-    (try (litellm/completion provider
-                             model
-                             request
-                             (cond-> {:api-key api-key}
-                               api-base (assoc :api-base api-base)
-                               timeout-ms (assoc :timeout timeout-ms)))
-         (catch Exception e
-           (throw (ex-info (str "LLM request failed: " (ex-message e))
-                           {:type :tool, :provider provider, :model model}
-                           e))))))
+  (dscloj/register-provider! provider-key
+                             {:provider provider,
+                              :model model,
+                              :config (cond-> {:api-key api-key}
+                                        api-base (assoc :api-base api-base)
+                                        timeout-ms (assoc :timeout
+                                                     timeout-ms))})
+  provider-key)
 
-(defn complete-once
-  "One tool-less completion over MESSAGES plus a final user TEXT.
-  Returns the assistant's text, nil when the model returned none."
-  [complete-fn messages text {:keys [max-tokens], :or {max-tokens 4096}}]
-  (let [response (complete-fn {:messages (conj (vec messages)
-                                               {:role :user, :content text}),
-                               :max-tokens max-tokens})]
-    (:content (:message (first (:choices response))))))
+(defn- json-type->spec
+  "A Malli spec for an OpenAI JSON-schema type. Only used to label the
+  argument's type in the agent's tool catalog, so the mapping is coarse."
+  [t]
+  (case t
+    "string" :string
+    "integer" :int
+    "number" :double
+    "boolean" :boolean
+    "array" [:vector :any]
+    "object" [:map]
+    :string))
 
-(defn- tool-result-message
-  "Execute one tool call and shape its outcome as a :tool message.
-  Executor exceptions become {:error MSG} results so the model can
-  recover instead of the loop dying."
-  [execute-tool on-event round tool-call]
-  (let [call-id (:id tool-call)
-        tool-name (get-in tool-call [:function :name])
-        args (json/read-str (get-in tool-call [:function :arguments])
-                            :key-fn
-                            keyword)
-        _ (on-event
-            {:event :tool-call, :round round, :name tool-name, :args args})
-        result (try (execute-tool tool-name args)
-                    (catch Exception e
-                      (on-event {:event :tool-error,
-                                 :round round,
-                                 :name tool-name,
-                                 :message (ex-message e)})
-                      {:error (ex-message e)}))]
-    {:role :tool, :tool-call-id call-id, :content (json/write-str result)}))
+(defn- schema->tool
+  "Convert an OpenAI function SCHEMA plus the shared EXECUTE-TOOL dispatcher
+  into a DSCloj tool map. The handler runs the executor and returns its
+  result as a JSON observation string; executor exceptions propagate so
+  DSCloj records them as observations the model can recover from."
+  [schema execute-tool]
+  (let [f (:function schema)
+        tool-name (:name f)
+        props (get-in f [:parameters :properties])
+        args (mapv (fn [[arg-name v]]
+                     {:name arg-name,
+                      :spec (json-type->spec (:type v)),
+                      :description (:description v)})
+               props)]
+    {:name tool-name,
+     :description (:description f),
+     :args args,
+     :handler (fn [args-map]
+                (json/write-str (execute-tool tool-name args-map)))}))
+
+(defn- forward-steps
+  "Adapt DSCloj :on-step callbacks to denote-mono :on-event :tool-call
+  events, so existing progress narration keeps working. The synthetic
+  finishing turn is not reported."
+  [on-event]
+  (fn [{:keys [iteration tool-name tool-args]}]
+    (when-not (= tool-name "finish")
+      (on-event {:event :tool-call,
+                 :round (inc iteration),
+                 :name tool-name,
+                 :args tool-args}))))
+
+(def ^:private loop-module
+  "The ReAct module denote-mono drives: a single free-form task in, a single
+  final text out. The caller's system prompt becomes the instructions."
+  {:inputs [{:name :task,
+             :spec :string,
+             :description "The task, with all the context you need to do it."}],
+   :outputs [{:name :final_text,
+              :spec :string,
+              :description "Your final report or answer for the task."}]})
 
 (defn run-tool-loop
-  "Drive COMPLETE-FN until the model answers without tool calls or
-  MAX-ROUNDS requests have been made. OPTS:
-  {:system STR :user STR :tools [SCHEMAS]
+  "Drive an agentic tool loop over PROVIDER (a key from register-provider!)
+  via DSCloj's ReAct. OPTS:
+  {:system STR :user STR :tools [OPENAI-SCHEMAS]
    :execute-tool (fn [name args-map] value)
-   :max-rounds N (default 20) :max-tokens N (default 4096)}.
-  An optional :on-event fn receives progress maps as the loop runs:
-  {:event :request :round N}, {:event :tool-call :round N :name S :args M},
-  and {:event :tool-error :round N :name S :message S}.
-  Returns {:final-text STR-or-nil :messages [...] :rounds N
+   :max-rounds N (default 20) :max-tokens N (default 4096)
+   :on-event (fn [event])}.
+  Returns {:final-text STR-or-nil :trajectory STR :rounds N
            :stopped :done|:max-rounds}."
-  [complete-fn
+  [provider
    {:keys [system user tools execute-tool max-rounds max-tokens on-event],
     :or {max-rounds 20, max-tokens 4096}}]
-  (let [on-event (or on-event (constantly nil))]
-    (loop [messages [{:role :system, :content system}
-                     {:role :user, :content user}]
-           round 1]
-      (let [_ (on-event {:event :request, :round round})
-            response (complete-fn {:messages messages,
-                                   :tools tools,
-                                   :max-tokens max-tokens})
-            ;; first, not (get-in [:choices 0]): some provider transforms
-            ;; (openrouter) return :choices as a seq, where indexed get
-            ;; silently yields nil.
-            msg (:message (first (:choices response)))
-            tool-calls (:tool-calls msg)]
-        (cond
-          (empty? tool-calls) {:final-text (:content msg),
-                               :messages (conj messages msg),
-                               :rounds round,
-                               :stopped :done}
-          (>= round max-rounds) {:final-text nil,
-                                 :messages (conj messages msg),
-                                 :rounds round,
-                                 :stopped :max-rounds}
-          :else
-            (let [assistant (cond-> msg (nil? (:content msg)) (dissoc :content))
-                  results (mapv
-                            #(tool-result-message execute-tool on-event round %)
-                            tool-calls)]
-              (recur (into (conj messages assistant) results) (inc round))))))))
+  (let [on-event (or on-event (constantly nil))
+        module (assoc loop-module :instructions system)
+        result (dscloj/react provider
+                             module
+                             {:task user}
+                             (mapv #(schema->tool % execute-tool) tools)
+                             {:max-iters max-rounds,
+                              :max-tokens max-tokens,
+                              :validate? false,
+                              :on-step (forward-steps on-event)})]
+    {:final-text (:final_text result),
+     :trajectory (:trajectory result),
+     :rounds (:iterations result),
+     :stopped (case (:stopped result)
+                :finished :done
+                :max-iters :max-rounds)}))
+
+(defn chain-of-thought
+  "DSCloj chain-of-thought over PROVIDER: reason step by step, then produce
+  MODULE's outputs from INPUT-MAP. See dscloj.cot/chain-of-thought."
+  [provider module input-map opts]
+  (dscloj/chain-of-thought provider module input-map opts))

@@ -1,195 +1,148 @@
 (ns denote-mono.llm.interface-test
+  "Tests for the DSCloj adapter. DSCloj drives the ReAct loop and parses the
+  text protocol; these tests stub litellm.router/completion (no network) with
+  DSCloj-format responses and verify the denote-mono <-> DSCloj conversion:
+  OpenAI tool schemas become DSCloj tools, executors run, results map back,
+  and progress events are forwarded."
   (:require [clojure.data.json :as json]
             [clojure.test :refer [deftest is testing]]
-            [denote-mono.llm.interface :as llm]))
+            [denote-mono.llm.interface :as llm]
+            [litellm.router :as router]))
+
+(defn- resp
+  [content]
+  {:choices [{:message {:role "assistant", :content content}}]})
 
 (defn- scripted
-  "Complete-fn that pops canned assistant messages off RESPONSES and
-  records every request it receives in REQUESTS."
-  [responses requests]
-  (let [remaining (atom (vec responses))]
-    (fn [request]
-      (swap! requests conj request)
-      (let [msg (first @remaining)]
-        (swap! remaining subvec 1)
-        {:choices [{:message msg}]}))))
+  "Stub returning each content in CONTENTS in order (DSCloj-format strings)."
+  [contents]
+  (let [remaining (atom contents)]
+    (fn [_config-name _request]
+      (let [c (first @remaining)]
+        (swap! remaining rest)
+        (resp c)))))
+
+(defn- step
+  "A ReAct step response selecting TOOL with ARGS."
+  [thought tool args]
+  (str "[[ ## next_thought ## ]]\n"
+       thought
+       "\n\n"
+       "[[ ## next_tool_name ## ]]\n"
+       tool
+       "\n\n"
+       "[[ ## next_tool_args ## ]]\n"
+       (json/write-str args)))
+
+(defn- extract
+  "A chain-of-thought extraction response for the loop's :final_text output."
+  [reasoning final]
+  (str "[[ ## reasoning ## ]]\n"
+       reasoning
+       "\n\n"
+       "[[ ## final_text ## ]]\n"
+       final))
 
 (def ^:private weather-tool
   {:type "function",
    :function {:name "get_weather",
               :description "Get the weather",
               :parameters {:type "object",
-                           :properties {:location {:type "string"}},
+                           :properties {:location {:type "string",
+                                                   :description "City"}},
                            :required ["location"]}}})
 
-(deftest single-round-test
-  (testing "a plain assistant reply ends the loop"
-    (let [requests (atom [])
-          result (llm/run-tool-loop
-                   (scripted [{:role :assistant, :content "All done."}]
-                             requests)
-                   {:system "You are a test.",
-                    :user "Hello",
-                    :tools [weather-tool],
-                    :execute-tool (fn [_ _] (throw (ex-info "no tools" {})))})]
-      (is (= "All done." (:final-text result)))
-      (is (= :done (:stopped result)))
-      (is (= 1 (:rounds result)))
-      (let [request (first @requests)]
-        (is (= [weather-tool] (:tools request)))
-        (is (= [{:role :system, :content "You are a test."}
-                {:role :user, :content "Hello"}]
-               (:messages request)))))))
+(defn- provider
+  []
+  (llm/register-provider!
+    {:provider :openrouter, :model "test-model", :api-key "test-key"}))
 
-(deftest tool-round-test
-  (testing "tool calls are executed and results fed back"
-    (let [requests (atom [])
-          tool-args (atom nil)
-          result
-            (llm/run-tool-loop
-              (scripted [{:role :assistant,
-                          :content nil,
-                          :tool-calls [{:id "call_1",
-                                        :type "function",
-                                        :function {:name "get_weather",
-                                                   :arguments
-                                                   "{\"location\":\"Pune\"}"}}]}
-                         {:role :assistant, :content "It is sunny."}]
-                        requests)
-              {:system "sys",
-               :user "weather?",
-               :tools [weather-tool],
-               :execute-tool
-               (fn [name args] (reset! tool-args [name args]) {:temp 31})})]
-      (is (= "It is sunny." (:final-text result)))
-      (is (= :done (:stopped result)))
-      (is (= 2 (:rounds result)))
-      (testing "arguments arrive parsed with keyword keys"
-        (is (= ["get_weather" {:location "Pune"}] @tool-args)))
-      (testing "second request carries assistant msg and tool result"
-        (let [messages (:messages (second @requests))
-              [_sys _user assistant tool-result] messages]
-          (is (= 4 (count messages)))
-          (is (:tool-calls assistant))
-          (is (not (contains? assistant :content)))
-          (is (= :tool (:role tool-result)))
-          (is (= "call_1" (:tool-call-id tool-result)))
-          (is (= {"temp" 31} (json/read-str (:content tool-result)))))))))
+(deftest register-provider-test
+  (testing "registration returns a provider key usable downstream"
+    (is (keyword? (provider)))))
 
-(deftest tool-error-test
-  (testing "an executor exception becomes an error result, not a crash"
-    (let [requests (atom [])
-          result (llm/run-tool-loop
-                   (scripted [{:role :assistant,
-                               :content nil,
-                               :tool-calls [{:id "call_1",
-                                             :type "function",
-                                             :function {:name "explode",
-                                                        :arguments "{}"}}]}
-                              {:role :assistant, :content "Recovered."}]
-                             requests)
-                   {:system "sys",
-                    :user "go",
-                    :tools [],
-                    :execute-tool (fn [_ _] (throw (ex-info "boom" {})))})]
-      (is (= "Recovered." (:final-text result)))
-      (let [tool-result (last (:messages (second @requests)))]
-        (is (= :tool (:role tool-result)))
-        (is (= {"error" "boom"} (json/read-str (:content tool-result))))))))
-
-(deftest complete-once-test
-  (testing "one tool-less completion over an existing transcript"
-    (let [requests (atom [])
-          transcript [{:role :system, :content "s"} {:role :user, :content "u"}
-                      {:role :assistant, :content "working"}]
-          text (llm/complete-once (scripted [{:role :assistant,
-                                              :content "Handoff: link 1=2."}]
-                                            requests)
-                                  transcript
-                                  "Summarize what remains."
-                                  {:max-tokens 512})]
-      (is (= "Handoff: link 1=2." text))
-      (let [request (first @requests)]
-        (is (nil? (:tools request)))
-        (is (= 512 (:max-tokens request)))
-        (is (= (conj transcript
-                     {:role :user, :content "Summarize what remains."})
-               (:messages request)))))))
-
-(deftest list-shaped-choices-test
-  (testing "providers returning :choices as a seq (openrouter) still work"
-    (let [complete (fn [_request]
-                     ;; a list, not a vector — indexed get-in returns nil
-                     {:choices (list {:message {:role :assistant,
-                                                :content "Hi."}})})
-          result (llm/run-tool-loop complete
-                                    {:system "s",
-                                     :user "u",
-                                     :tools [],
-                                     :execute-tool (fn [_ _] nil)})]
-      (is (= "Hi." (:final-text result)))
-      (is (= :done (:stopped result))))))
-
-(deftest on-event-test
-  (testing "the loop reports requests and tool calls as they happen"
-    (let [events (atom [])
-          _ (llm/run-tool-loop
-              (scripted [{:role :assistant,
-                          :content nil,
-                          :tool-calls [{:id "call_1",
-                                        :type "function",
-                                        :function {:name "get_weather",
-                                                   :arguments
-                                                   "{\"location\":\"Pune\"}"}}]}
-                         {:role :assistant, :content "Done."}]
-                        (atom []))
-              {:system "s",
-               :user "u",
-               :tools [],
-               :execute-tool (fn [_ _] {:ok true}),
-               :on-event #(swap! events conj %)})]
-      (is (= [{:event :request, :round 1}
-              {:event :tool-call,
-               :round 1,
-               :name "get_weather",
-               :args {:location "Pune"}} {:event :request, :round 2}]
-             @events))))
-  (testing "executor failures are reported as tool-error events"
-    (let [events (atom [])
-          _ (llm/run-tool-loop
-              (scripted [{:role :assistant,
-                          :content nil,
-                          :tool-calls [{:id "call_1",
-                                        :type "function",
-                                        :function {:name "explode",
-                                                   :arguments "{}"}}]}
-                         {:role :assistant, :content "Done."}]
-                        (atom []))
-              {:system "s",
-               :user "u",
-               :tools [],
-               :execute-tool (fn [_ _] (throw (ex-info "boom" {}))),
-               :on-event #(swap! events conj %)})]
-      (is (some
-            #(=
-               %
-               {:event :tool-error, :round 1, :name "explode", :message "boom"})
-            @events)))))
+(deftest tool-then-finish-test
+  (testing "a tool call then finish runs the executor and extracts final text"
+    (let [calls (atom [])]
+      (with-redefs [router/completion
+                      (scripted
+                        [(step "check weather" "get_weather" {:location "Pune"})
+                         (step "have it" "finish" {})
+                         (extract "reasoned" "It is sunny.")])]
+        (let [result (llm/run-tool-loop
+                       (provider)
+                       {:system "sys",
+                        :user "weather?",
+                        :tools [weather-tool],
+                        :execute-tool
+                        (fn [n a] (swap! calls conj [n a]) {:temp 31})})]
+          (is (= "It is sunny." (:final-text result)))
+          (is (= :done (:stopped result)))
+          (testing "executor saw the tool name and keyword-keyed args"
+            (is (= [["get_weather" {:location "Pune"}]] @calls)))
+          (testing "the trajectory is returned for handoff/resume"
+            (is (string? (:trajectory result)))
+            (is (re-find #"get_weather" (:trajectory result)))))))))
 
 (deftest max-rounds-test
-  (testing "the loop gives up after :max-rounds tool rounds"
-    (let [tool-call {:role :assistant,
-                     :content nil,
-                     :tool-calls [{:id "call_1",
-                                   :type "function",
-                                   :function {:name "spin", :arguments "{}"}}]}
-          requests (atom [])
-          result (llm/run-tool-loop (scripted (repeat 3 tool-call) requests)
-                                    {:system "sys",
-                                     :user "go",
-                                     :tools [],
-                                     :execute-tool (fn [_ _] {:ok true}),
-                                     :max-rounds 3})]
-      (is (= :max-rounds (:stopped result)))
-      (is (nil? (:final-text result)))
-      (is (= 3 (:rounds result))))))
+  (testing "a loop that never finishes stops at :max-rounds"
+    (with-redefs [router/completion
+                    (fn [_c _r]
+                      (resp (step "spin" "get_weather" {:location "X"})))]
+      (let [result (llm/run-tool-loop (provider)
+                                      {:system "s",
+                                       :user "u",
+                                       :tools [weather-tool],
+                                       :execute-tool (fn [_ _] {:ok true}),
+                                       :max-rounds 2})]
+        (is (= :max-rounds (:stopped result)))
+        (is (= 2 (:rounds result)))))))
+
+(deftest tool-error-recovers-test
+  (testing "an executor exception becomes an observation, not a crash"
+    (with-redefs [router/completion
+                    (scripted [(step "try" "get_weather" {:location "X"})
+                               (step "give up" "finish" {})
+                               (extract "r" "Recovered.")])]
+      (let [result (llm/run-tool-loop (provider)
+                                      {:system "s",
+                                       :user "u",
+                                       :tools [weather-tool],
+                                       :execute-tool
+                                       (fn [_ _] (throw (ex-info "boom" {})))})]
+        (is (= "Recovered." (:final-text result)))
+        (is (re-find #"Execution error in get_weather: boom"
+                     (:trajectory result)))))))
+
+(deftest on-event-forwarding-test
+  (testing "tool calls surface as :tool-call events; finish is not reported"
+    (let [events (atom [])]
+      (with-redefs [router/completion
+                      (scripted [(step "t" "get_weather" {:location "P"})
+                                 (step "f" "finish" {}) (extract "r" "done")])]
+        (llm/run-tool-loop (provider)
+                           {:system "s",
+                            :user "u",
+                            :tools [weather-tool],
+                            :execute-tool (fn [_ _] {:ok true}),
+                            :on-event #(swap! events conj %)})
+        (is (some #(= %
+                      {:event :tool-call,
+                       :round 1,
+                       :name "get_weather",
+                       :args {:location "P"}})
+                  @events))
+        (is (not (some #(= "finish" (:name %)) @events)))))))
+
+(deftest chain-of-thought-test
+  (testing "chain-of-thought returns reasoning alongside the output"
+    (with-redefs [router/completion (fn [_c _r]
+                                      (resp (extract "because 6*7" "42")))]
+      (let [result (llm/chain-of-thought (provider)
+                                         {:inputs [{:name :q, :spec :string}],
+                                          :outputs [{:name :final_text,
+                                                     :spec :string}]}
+                                         {:q "6 times 7?"}
+                                         {:validate? false})]
+        (is (= "42" (:final_text result)))
+        (is (= "because 6*7" (:reasoning result)))))))

@@ -1,8 +1,13 @@
 (ns denote-mono.cli.llm-wiki-test
+  "CLI-level tests for llm-wiki. DSCloj drives the agent loop; these tests
+  stub litellm.router/completion (no network) with DSCloj-format responses
+  and provide a dummy API key in the harness env so provider registration
+  succeeds."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [denote-mono.cli.core :as cli])
+            [denote-mono.cli.core :as cli]
+            [litellm.router :as router])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
 
@@ -29,7 +34,9 @@
                    :default-llm-wiki-silo :wiki,
                    :silos {:notes {:path notes},
                            :wiki {:path wiki, :llm-wiki true}}}))
-    (binding [*harness* {:env {"EDITOR" "true"}, :cwd "/elsewhere"}
+    (binding [*harness* {:env {"EDITOR" "true",
+                               "OPENROUTER_API_KEY" "test-key"},
+                         :cwd "/elsewhere"}
               *config-path* config-path
               *wiki-root* wiki
               *raw-source* source]
@@ -41,23 +48,42 @@
   [harness & args]
   (cli/run (into ["--config" *config-path*] args) harness))
 
+(defn- resp
+  [content]
+  {:choices [{:message {:role "assistant", :content content}}]})
+
 (defn- scripted
-  [responses]
-  (let [remaining (atom (vec responses))]
-    (fn [_request]
-      (let [msg (first @remaining)]
-        (swap! remaining subvec 1)
-        {:choices [{:message msg}]}))))
+  "A litellm.router/completion stub returning each DSCloj-format string in
+  CONTENTS in order."
+  [contents]
+  (let [remaining (atom (vec contents))]
+    (fn [_config-name _request]
+      (let [c (first @remaining)]
+        (swap! remaining rest)
+        (resp c)))))
 
-(defn- tool-call
-  [id name args]
-  {:role :assistant,
-   :content nil,
-   :tool-calls [{:id id,
-                 :type "function",
-                 :function {:name name, :arguments (json/write-str args)}}]})
+(defn- step
+  "A ReAct step response selecting TOOL with ARGS (a map)."
+  [thought tool args]
+  (str "[[ ## next_thought ## ]]\n"
+       thought
+       "\n\n"
+       "[[ ## next_tool_name ## ]]\n"
+       tool
+       "\n\n"
+       "[[ ## next_tool_args ## ]]\n"
+       (json/write-str args)))
 
-(defn- no-llm [] (fn [_request] (throw (ex-info "LLM must not be called" {}))))
+(defn- cot
+  "A chain-of-thought extraction response producing FIELD = VALUE."
+  [field reasoning value]
+  (str "[[ ## reasoning ## ]]\n"
+       reasoning
+       "\n\n"
+       "[[ ## " field
+       " ## ]]\n" value))
+
+(defn- no-llm [] (fn [& _] (throw (ex-info "LLM must not be called" {}))))
 
 (defn- bump-mtime!
   "Advance PATH's mtime so it no longer matches a recorded ingest."
@@ -67,16 +93,17 @@
 
 (deftest ingest-command
   (testing "ingest runs the loop and reports created notes"
-    (let [harness (assoc *harness*
-                    :llm-complete (scripted [(tool-call "c1"
-                                                        "create_note"
-                                                        {:title "Alpha",
-                                                         :keywords ["ml"],
-                                                         :body
-                                                         "Alpha distilled."})
-                                             {:role :assistant,
-                                              :content "Filed under 1."}]))
-          {:keys [exit out]} (run-cli harness "llm-wiki" "ingest" *raw-source*)]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion
+                            (scripted
+                              [(step "make alpha"
+                                     "create_note"
+                                     {:title "Alpha",
+                                      :keywords ["ml"],
+                                      :body "Alpha distilled."})
+                               (step "done" "finish" {})
+                               (cot "final_text" "r" "Filed under 1.")])]
+              (run-cli *harness* "llm-wiki" "ingest" *raw-source*))]
       (is (zero? exit))
       (is (str/includes? out "Created: "))
       (is (str/includes? out "Filed under 1."))
@@ -88,158 +115,173 @@
       (testing "the source is untouched"
         (is (= "Raw source text about alpha." (slurp *raw-source*))))))
   (testing "re-running an unchanged ingested source is skipped"
-    (let [{:keys [exit out]} (run-cli (assoc *harness* :llm-complete (no-llm))
-                                      "llm-wiki"
-                                      "ingest"
-                                      *raw-source*)]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion (no-llm)]
+              (run-cli *harness* "llm-wiki" "ingest" *raw-source*))]
       (is (zero? exit))
       (is (str/includes? out "Skipped"))))
   (testing "missing source fails before any LLM call"
-    (let [{:keys [exit]} (run-cli (assoc *harness* :llm-complete (no-llm))
-                                  "llm-wiki"
-                                  "ingest"
-                                  "/nope/missing.txt")]
+    (let [{:keys [exit]}
+            (with-redefs [router/completion (no-llm)]
+              (run-cli *harness* "llm-wiki" "ingest" "/nope/missing.txt"))]
       (is (= 3 exit))))
   (testing "no FILE argument is a usage error"
-    (let [{:keys [exit out]} (run-cli (assoc *harness* :llm-complete (no-llm))
-                                      "llm-wiki"
-                                      "ingest")]
+    (let [{:keys [exit out]} (with-redefs [router/completion (no-llm)]
+                               (run-cli *harness* "llm-wiki" "ingest"))]
       (is (= 2 exit))
       (is (str/includes? out "Usage"))))
   (testing "exhausting --max-rounds maps to the tool exit code"
     (bump-mtime! *raw-source*) ;; else the completed ingest above skips
-    (let [harness
-            (assoc *harness*
-              :llm-complete
-                (scripted
-                  [(tool-call "c1" "create_note" {:title "Spin", :body "spin"})
-                   {:role :assistant, :content "Everything remains."}]))
-          {:keys [exit out]} (run-cli harness
-                                      "llm-wiki"
-                                      "ingest" *raw-source*
-                                      "--max-rounds" "1")]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion
+                            (scripted
+                              [(step "spin"
+                                     "create_note"
+                                     {:title "Spin", :body "spin"})
+                               (cot "final_text" "r" "partial")
+                               (cot "remaining" "r" "Everything remains.")])]
+              (run-cli *harness*
+                       "llm-wiki"
+                       "ingest" *raw-source*
+                       "--max-rounds" "1"))]
       (is (= 5 exit))
       (testing "the failure tells you progress is saved and how to resume"
         (is (str/includes? out "re-run")))))
   (testing "an empty model reply is a tool failure, not silent success"
-    (let [harness (assoc *harness*
-                    :llm-complete (scripted [{:role :assistant, :content nil}]))
-          {:keys [exit out]} (run-cli harness "llm-wiki" "ingest" *raw-source*)]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion (scripted
+                                              [(step "nothing" "finish" {})
+                                               (cot "final_text" "r" "")])]
+              (run-cli *harness* "llm-wiki" "ingest" *raw-source*))]
       (is (= 5 exit))
       (is (str/includes? out "empty reply"))))
   (testing "--fresh is accepted"
-    (let [harness (assoc *harness*
-                    :llm-complete (scripted [{:role :assistant,
-                                              :content "Done."}]))
-          {:keys [exit]}
-            (run-cli harness "llm-wiki" "ingest" *raw-source* "--fresh")]
+    (let [{:keys [exit]}
+            (with-redefs [router/completion (scripted
+                                              [(step "f" "finish" {})
+                                               (cot "final_text" "r" "Done.")])]
+              (run-cli *harness* "llm-wiki" "ingest" *raw-source* "--fresh"))]
       (is (zero? exit)))))
 
 (deftest ingest-multiple-sources
   (let [source2 (str (temp-dir "denote-llm-wiki-src2") "/second.txt")]
     (spit source2 "Second source text.")
     (testing "several FILE arguments ingest sequentially, labeled per source"
-      (let [harness
-              (assoc *harness*
-                :llm-complete
-                  (scripted
-                    [(tool-call "c1" "create_note" {:title "One", :body "one"})
-                     {:role :assistant, :content "Did one."}
-                     (tool-call "c2" "create_note" {:title "Two", :body "two"})
-                     {:role :assistant, :content "Did two."}]))
-            {:keys [exit out]}
-              (run-cli harness "llm-wiki" "ingest" *raw-source* source2)]
+      (let [{:keys [exit out]}
+              (with-redefs [router/completion
+                              (scripted [(step "one"
+                                               "create_note"
+                                               {:title "One", :body "one"})
+                                         (step "done" "finish" {})
+                                         (cot "final_text" "r" "Did one.")
+                                         (step "two"
+                                               "create_note"
+                                               {:title "Two", :body "two"})
+                                         (step "done" "finish" {})
+                                         (cot "final_text" "r" "Did two.")])]
+                (run-cli *harness* "llm-wiki" "ingest" *raw-source* source2))]
         (is (zero? exit))
         (is (str/includes? out *raw-source*))
         (is (str/includes? out source2))
         (is (str/includes? out "Did one."))
         (is (str/includes? out "Did two."))))
     (testing "one bad source fails the batch before any LLM call"
-      (let [{:keys [exit]} (run-cli (assoc *harness* :llm-complete (no-llm))
-                                    "llm-wiki"
-                                    "ingest"
-                                    *raw-source*
-                                    "/nope/missing.txt")]
+      (let [{:keys [exit]} (with-redefs [router/completion (no-llm)]
+                             (run-cli *harness*
+                                      "llm-wiki"
+                                      "ingest"
+                                      *raw-source*
+                                      "/nope/missing.txt"))]
         (is (= 3 exit))))
     (testing "an exhausted source fails the batch; later sources still run"
       (bump-mtime! *raw-source*) ;; else the completed ingests above skip
       (bump-mtime! source2)
-      (let [harness
-              (assoc *harness*
-                :llm-complete
-                  (scripted
-                    [(tool-call "c1" "create_note" {:title "Spin", :body "s"})
-                     ;; handoff note for the exhausted first source
-                     {:role :assistant, :content "More to do."}
-                     {:role :assistant, :content "Second done."}]))
-            {:keys [exit out]} (run-cli harness
-                                        "llm-wiki"
-                                        "ingest"
-                                        *raw-source*
-                                        source2
-                                        "--max-rounds"
-                                        "1")]
+      (let [{:keys [exit out]}
+              (with-redefs [router/completion
+                              (scripted
+                                [(step "spin"
+                                       "create_note"
+                                       {:title "Spin", :body "s"})
+                                 (cot "final_text" "r" "partial")
+                                 (cot "remaining" "r" "More to do.")
+                                 (step "f" "finish" {})
+                                 (cot "final_text" "r" "Second done.")])]
+                (run-cli *harness*
+                         "llm-wiki"
+                         "ingest"
+                         *raw-source*
+                         source2
+                         "--max-rounds"
+                         "1"))]
         (is (= 5 exit))
         (is (str/includes? out "re-run"))
         (is (str/includes? out "Second done."))))))
 
 (deftest ingest-progress
   (let [responses
-          [(tool-call "c1" "create_note" {:title "Alpha", :body "Body."})
-           {:role :assistant, :content "Done."}]]
+          [(step "make alpha" "create_note" {:title "Alpha", :body "Body."})
+           (step "done" "finish" {}) (cot "final_text" "r" "Done.")]]
     (testing "on a terminal, progress is narrated on stderr"
-      (let [err (java.io.StringWriter.)
-            harness (assoc *harness*
-                      :tty? true
-                      :llm-complete (scripted responses))]
-        (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
+      (let [err (java.io.StringWriter.)]
+        (binding [*err* err]
+          (with-redefs [router/completion (scripted responses)]
+            (run-cli (assoc *harness* :tty? true)
+                     "llm-wiki"
+                     "ingest"
+                     *raw-source*)))
         (is (str/includes? (str err) "creating note: Alpha"))))
     (testing "a tty on stderr alone narrates too (stdin piped, e.g. xargs)"
       (bump-mtime! *raw-source*) ;; else the completed ingest above skips
-      (let [err (java.io.StringWriter.)
-            harness (assoc *harness*
-                      :stderr-tty? true
-                      :llm-complete (scripted responses))]
-        (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
+      (let [err (java.io.StringWriter.)]
+        (binding [*err* err]
+          (with-redefs [router/completion (scripted responses)]
+            (run-cli (assoc *harness* :stderr-tty? true)
+                     "llm-wiki"
+                     "ingest"
+                     *raw-source*)))
         (is (str/includes? (str err) "creating note: Alpha"))))
     (testing "piped output stays silent"
       (bump-mtime! *raw-source*)
-      (let [err (java.io.StringWriter.)
-            harness (assoc *harness* :llm-complete (scripted responses))]
-        (binding [*err* err] (run-cli harness "llm-wiki" "ingest" *raw-source*))
+      (let [err (java.io.StringWriter.)]
+        (binding [*err* err]
+          (with-redefs [router/completion (scripted responses)]
+            (run-cli *harness* "llm-wiki" "ingest" *raw-source*)))
         (is (= "" (str err)))))))
 
 (deftest query-command
   (testing "query prints the answer"
-    (let [harness (assoc *harness*
-                    :llm-complete (scripted [{:role :assistant,
-                                              :content "Alpha is the root."}]))
-          {:keys [exit out]}
-            (run-cli harness "llm-wiki" "query" "What is alpha?")]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion
+                            (scripted
+                              [(step "I know" "finish" {})
+                               (cot "final_text" "r" "Alpha is the root.")])]
+              (run-cli *harness* "llm-wiki" "query" "What is alpha?"))]
       (is (zero? exit))
       (is (str/includes? out "Alpha is the root."))
       (is (not (str/includes? out "Saved:")))))
   (testing "query --save files the answer and reports the path"
-    (let [harness (assoc *harness*
-                    :llm-complete (scripted [{:role :assistant,
-                                              :content "Alpha is the root."}]))
-          {:keys [exit out]}
-            (run-cli harness "llm-wiki" "query" "What is alpha?" "--save")]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion
+                            (scripted
+                              [(step "I know" "finish" {})
+                               (cot "final_text" "r" "Alpha is the root.")])]
+              (run-cli *harness* "llm-wiki" "query" "What is alpha?" "--save"))]
       (is (zero? exit))
       (is (str/includes? out "Saved: "))
       (let [saved (str/trim (subs out (+ (str/index-of out "Saved: ") 7)))]
         (is (str/includes? saved "what-is-alpha"))
         (is (.exists (java.io.File. (str *wiki-root* "/" saved)))))))
   (testing "an empty answer is a tool failure, not silent success"
-    (let [harness (assoc *harness*
-                    :llm-complete (scripted [{:role :assistant, :content nil}]))
-          {:keys [exit out]} (run-cli harness "llm-wiki" "query" "Anything?")]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion (scripted
+                                              [(step "nothing" "finish" {})
+                                               (cot "final_text" "r" "")])]
+              (run-cli *harness* "llm-wiki" "query" "Anything?"))]
       (is (= 5 exit))
       (is (str/includes? out "empty reply"))))
   (testing "no QUESTION argument is a usage error"
-    (let [{:keys [exit]} (run-cli (assoc *harness* :llm-complete (no-llm))
-                                  "llm-wiki"
-                                  "query")]
+    (let [{:keys [exit]} (with-redefs [router/completion (no-llm)]
+                           (run-cli *harness* "llm-wiki" "query"))]
       (is (= 2 exit)))))
 
 (deftest lint-command
@@ -264,11 +306,12 @@
       (is (str/includes? out "broken-link"))
       (is (str/includes? out "missing-source"))))
   (testing "--deep appends the LLM report"
-    (run-cli *harness* "llm-wiki" "lint" "--fix")
-    (let [harness (assoc *harness*
-                    :llm-complete (scripted [{:role :assistant,
-                                              :content "No contradictions."}]))
-          {:keys [exit out]} (run-cli harness "llm-wiki" "lint" "--deep")]
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion
+                            (scripted
+                              [(step "audit" "finish" {})
+                               (cot "final_text" "r" "No contradictions.")])]
+              (run-cli *harness* "llm-wiki" "lint" "--deep"))]
       (is (= 3 exit))
       (is (str/includes? out "No contradictions.")))))
 

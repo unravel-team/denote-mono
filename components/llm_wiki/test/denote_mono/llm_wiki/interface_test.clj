@@ -4,7 +4,8 @@
             [clojure.test :refer [deftest is testing]]
             [denote-mono.config.interface :as config]
             [denote-mono.filesystem.interface :as fs]
-            [denote-mono.llm-wiki.interface :as llm-wiki])
+            [denote-mono.llm-wiki.interface :as llm-wiki]
+            [litellm.router :as router])
   (:import (java.io File)
            (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -19,7 +20,9 @@
   (let [dir (temp-dir)]
     {:config (config/default-config),
      :silo {:name :wiki, :path dir, :llm-wiki true},
-     :env {}}))
+     ;; A dummy key so resolve-provider passes; tests stub
+     ;; router/completion.
+     :env {"OPENROUTER_API_KEY" "test-key"}}))
 
 (defn- wiki-path
   [context relative]
@@ -51,24 +54,51 @@
     (fs/write-text path content)
     path))
 
-(defn- scripted
-  "Complete-fn popping canned assistant messages, recording requests."
-  ([responses] (scripted responses (atom [])))
-  ([responses requests]
-   (let [remaining (atom (vec responses))]
-     (fn [request]
-       (swap! requests conj request)
-       (let [msg (first @remaining)]
-         (swap! remaining subvec 1)
-         {:choices [{:message msg}]})))))
+(defn- resp
+  [content]
+  {:choices [{:message {:role "assistant", :content content}}]})
 
-(defn- tool-call
-  [id name args]
-  {:role :assistant,
-   :content nil,
-   :tool-calls [{:id id,
-                 :type "function",
-                 :function {:name name, :arguments (json/write-str args)}}]})
+(defn- scripted
+  "A litellm.router/completion stub returning each DSCloj-format string in
+  CONTENTS in order, recording every request it receives."
+  ([contents] (scripted contents (atom [])))
+  ([contents requests]
+   (let [remaining (atom (vec contents))]
+     (fn [_config-name request]
+       (swap! requests conj request)
+       (let [c (first @remaining)]
+         (swap! remaining rest)
+         (resp c))))))
+
+(defn- step
+  "A ReAct step response selecting TOOL with ARGS (a map)."
+  [thought tool args]
+  (str "[[ ## next_thought ## ]]\n"
+       thought
+       "\n\n"
+       "[[ ## next_tool_name ## ]]\n"
+       tool
+       "\n\n"
+       "[[ ## next_tool_args ## ]]\n"
+       (json/write-str args)))
+
+(defn- cot
+  "A chain-of-thought extraction response producing FIELD = VALUE."
+  [field reasoning value]
+  (str "[[ ## reasoning ## ]]\n"
+       reasoning
+       "\n\n"
+       "[[ ## " field
+       " ## ]]\n" value))
+
+(defn- first-prompt
+  "The user-message content of the first recorded request."
+  [requests]
+  (-> @requests
+      first
+      :messages
+      first
+      :content))
 
 (defn- problem-checks [result] (set (map :check (:problems result))))
 
@@ -78,7 +108,7 @@
   (let [file (File. ^String path)]
     (.setLastModified file (+ (.lastModified file) 1000))))
 
-(defn- no-llm [] (fn [_] (throw (ex-info "LLM must not be called" {}))))
+(defn- no-llm [] (fn [& _] (throw (ex-info "LLM must not be called" {}))))
 
 ;;; Scaffold
 
@@ -393,20 +423,21 @@
 
 (deftest ingest-test
   (let [context (make-context)
-        source-dir (temp-dir)
-        source (str source-dir "/notes.txt")
+        source (str (temp-dir) "/notes.txt")
         _ (spit source "Raw source text about alpha.")
         requests (atom [])
-        context (assoc context
-                  :llm-complete
-                    (scripted [(tool-call "c1"
-                                          "create_note"
-                                          {:title "Alpha",
-                                           :keywords ["ml"],
-                                           :body "Alpha note body."})
-                               {:role :assistant, :content "Created one page."}]
-                              requests))
-        result (llm-wiki/ingest context source {:date "2026-06-11"})]
+        result (with-redefs [router/completion
+                               (scripted [(step "create alpha"
+                                                "create_note"
+                                                {:title "Alpha",
+                                                 :keywords ["ml"],
+                                                 :body "Alpha note body."})
+                                          (step "done" "finish" {})
+                                          (cot "final_text"
+                                               "reasoned"
+                                               "Created one page.")]
+                                         requests)]
+                 (llm-wiki/ingest context source {:date "2026-06-11"}))]
     (is (= :done (:stopped result)))
     (is (= "Created one page." (:final-text result)))
     (is (= 1 (count (:created result))))
@@ -416,14 +447,13 @@
       (is (str/includes? (fs/read-text (wiki-path context
                                                   (first (:created result))))
                          (str "(file:" (fs/canonical source) ")"))))
-    (testing "prompt carries source text and schema conventions"
-      (let [{:keys [messages]} (first @requests)]
-        (is (str/includes? (:content (second messages)) "Raw source text"))
-        (is (str/includes? (:content (first messages)) "Sources"))
+    (testing "the prompt carries source text and schema conventions"
+      (let [prompt (first-prompt requests)]
+        (is (str/includes? prompt "Raw source text"))
+        (is (str/includes? prompt "Sources"))
         (testing "and forbids placeholder links and piecemeal updates"
-          (is (str/includes? (:content (first messages)) "placeholder"))
-          (is (str/includes? (:content (first messages))
-                             "single update_note")))))
+          (is (str/includes? prompt "placeholder"))
+          (is (str/includes? prompt "single update_note")))))
     (testing "index and log are updated"
       (is (str/includes? (fs/read-text (wiki-path context "index.md"))
                          "denote:"))
@@ -434,57 +464,64 @@
   (let [context (make-context)
         source (str (temp-dir) "/notes.txt")
         _ (spit source "Raw text about alpha and beta.")
-        ingest! (fn [responses opts requests]
-                  (llm-wiki/ingest
-                    (assoc context :llm-complete (scripted responses requests))
-                    source
-                    (merge {:date "2026-06-12"} opts)))]
+        ingest! (fn [contents opts requests]
+                  (with-redefs [router/completion (scripted contents requests)]
+                    (llm-wiki/ingest context
+                                     source
+                                     (merge {:date "2026-06-12"} opts))))]
     (testing "a finished ingest logs status: complete"
-      (ingest! [(tool-call "c1" "create_note" {:title "Alpha", :body "A."})
-                {:role :assistant, :content "Done."}]
+      (ingest! [(step "make alpha" "create_note" {:title "Alpha", :body "A."})
+                (step "done" "finish" {}) (cot "final_text" "r" "Done.")]
                {}
                (atom []))
       (is (str/includes? (fs/read-text (wiki-path context "log.md"))
-                         "- status: complete\n")))
+                         "- status: complete
+")))
     (testing "an exhausted ingest logs incomplete status and a handoff note"
       (bump-mtime! source) ;; else the complete first ingest would skip it
       (let [requests (atom [])
             result
               (ingest!
-                [(tool-call "c2" "create_note" {:title "Beta", :body "B."})
-                 (tool-call "c3" "create_note" {:title "Gamma", :body "G."})
-                 {:role :assistant,
-                  :content "Remaining: cross-link beta\nand gamma."}]
+                [(step "make beta" "create_note" {:title "Beta", :body "B."})
+                 (step "make gamma" "create_note" {:title "Gamma", :body "G."})
+                 (cot "final_text" "r" "partial report")
+                 (cot "remaining" "r" "Remaining: cross-link beta and gamma.")]
                 {:max-rounds 2}
                 requests)
             log (fs/read-text (wiki-path context "log.md"))]
         (is (= :max-rounds (:stopped result)))
-        (is (str/includes? log "- status: incomplete (max-rounds after 2)\n"))
+        (is (str/includes? log "- status: incomplete (max-rounds after 2)
+"))
         (testing "the handoff note is collapsed to one log line"
           (is (str/includes?
                 log
-                "- remaining: Remaining: cross-link beta and gamma.\n")))
-        (testing "the handoff request drops the dangling tool-call message"
-          (let [handoff-messages (:messages (nth @requests 2))]
-            (is (= :user (:role (last handoff-messages))))
-            (is (not (:tool-calls (last (butlast handoff-messages)))))))))
+                "- remaining: Remaining: cross-link beta and gamma.
+")))
+        (testing "the handoff is a chain-of-thought over the trajectory"
+          ;; 4th request: 2 react turns + 1 final extraction + the handoff
+          (is (str/includes? (-> @requests
+                                 (nth 3)
+                                 :messages
+                                 first
+                                 :content)
+                             "Beta")))))
     (testing "re-ingesting the same source continues from the handoff"
       (let [requests (atom [])]
-        (ingest! [{:role :assistant, :content "Continued."}] {} requests)
-        (let [user-message (:content (second (:messages (first @requests))))]
-          (is (str/includes? user-message "ingested before"))
-          (is (str/includes? user-message "incomplete (max-rounds after 2)"))
-          (is (str/includes? user-message "--beta"))
-          (is (str/includes? user-message
-                             "Remaining: cross-link beta and gamma.")))))
+        (ingest! [(step "continue" "finish" {})
+                  (cot "final_text" "r" "Continued.")]
+                 {}
+                 requests)
+        (let [prompt (first-prompt requests)]
+          (is (str/includes? prompt "ingested before"))
+          (is (str/includes? prompt "incomplete (max-rounds after 2)"))
+          (is (str/includes? prompt "--beta"))
+          (is (str/includes? prompt "Remaining: cross-link beta and gamma.")))))
     (testing "--fresh ignores the history"
       (let [requests (atom [])]
-        (ingest! [{:role :assistant, :content "Fresh."}]
+        (ingest! [(step "f" "finish" {}) (cot "final_text" "r" "Fresh.")]
                  {:fresh? true}
                  requests)
-        (is (not (str/includes? (:content (second (:messages (first
-                                                               @requests))))
-                                "ingested before")))))
+        (is (not (str/includes? (first-prompt requests) "ingested before")))))
     (testing "ingest-history reflects the latest entry for the source"
       (let [history (llm-wiki/ingest-history context source)]
         (is (= "complete" (:status history)))
@@ -502,16 +539,20 @@
                           :sig "1",
                           :title "Alpha",
                           :keywords [],
-                          :body "Old body.\n"})
+                          :body "Old body.
+"})
           relative "20240101T000000==1--alpha.md"
-          context
-            (assoc context
-              :llm-complete
-                (scripted
-                  [(tool-call "c1" "update_note" {:path relative, :body "One."})
-                   (tool-call "c2" "update_note" {:path relative, :body "Two."})
-                   {:role :assistant, :content "Done."}]))
-          result (llm-wiki/ingest context source {:date "2026-06-12"})]
+          result (with-redefs [router/completion
+                                 (scripted
+                                   [(step "first"
+                                          "update_note"
+                                          {:path relative, :body "One."})
+                                    (step "second"
+                                          "update_note"
+                                          {:path relative, :body "Two."})
+                                    (step "done" "finish" {})
+                                    (cot "final_text" "r" "Done.")])]
+                   (llm-wiki/ingest context source {:date "2026-06-12"}))]
       (is (= [relative] (:updated result)))
       (is (= 1
              (count (re-seq #"- updated: "
@@ -521,23 +562,24 @@
   (let [context (make-context)
         source (str (temp-dir) "/notes.txt")
         _ (spit source "Raw text.")
-        ingest! (fn [extra opts]
-                  (llm-wiki/ingest (merge context extra)
-                                   source
-                                   (merge {:date "2026-06-12"} opts)))]
+        ingest! (fn [stub extra opts]
+                  (with-redefs [router/completion stub]
+                    (llm-wiki/ingest (merge context extra)
+                                     source
+                                     (merge {:date "2026-06-12"} opts))))]
     (testing "a complete ingest records the source mtime in the log"
-      (ingest! {:llm-complete (scripted [(tool-call "c1"
-                                                    "create_note"
-                                                    {:title "A", :body "A."})
-                                         {:role :assistant, :content "Done."}])}
+      (ingest! (scripted [(step "make a" "create_note" {:title "A", :body "A."})
+                          (step "done" "finish" {})
+                          (cot "final_text" "r" "Done.")])
+               {}
                {})
-      (is (re-find #"- source-mtime: \d+\n"
+      (is (re-find #"- source-mtime: \d+
+"
                    (fs/read-text (wiki-path context "log.md")))))
     (testing "an unchanged complete source is skipped without an LLM call"
       (let [messages (atom [])
-            result (ingest! {:llm-complete (no-llm),
-                             :on-progress #(swap! messages conj %)}
-                            {})]
+            result
+              (ingest! (no-llm) {:on-progress #(swap! messages conj %)} {})]
         (is (= :skipped (:stopped result)))
         (is (empty? (:created result)))
         (is (some #(str/includes? % "unchanged") @messages))
@@ -548,14 +590,16 @@
                                                          "log.md")))))))))
     (testing "--fresh overrides the skip"
       (is (= :done
-             (:stopped (ingest! {:llm-complete (scripted [{:role :assistant,
-                                                           :content "Fresh."}])}
+             (:stopped (ingest! (scripted [(step "f" "finish" {})
+                                           (cot "final_text" "r" "Fresh.")])
+                                {}
                                 {:fresh? true})))))
     (testing "a source modified since the ingest is reprocessed"
       (bump-mtime! source)
       (is (= :done
-             (:stopped (ingest! {:llm-complete (scripted [{:role :assistant,
-                                                           :content "Again."}])}
+             (:stopped (ingest! (scripted [(step "f" "finish" {})
+                                           (cot "final_text" "r" "Again.")])
+                                {}
                                 {})))))))
 
 (deftest ingest-skip-legacy-entry-test
@@ -574,58 +618,55 @@
     (testing "a file that provably predates the entry's day is skipped"
       (.setLastModified (File. source) 1590000000000) ;; 2020-05-20
       (is (= :skipped
-             (:stopped (llm-wiki/ingest (assoc context :llm-complete (no-llm))
-                                        source
-                                        {:date "2026-06-12"})))))
+             (:stopped
+               (with-redefs [router/completion (no-llm)]
+                 (llm-wiki/ingest context source {:date "2026-06-12"}))))))
     (testing "a file touched on or after the entry's day is reprocessed"
       (.setLastModified (File. source) 1600000000000) ;; 2020-09-13
       (is (= :done
-             (:stopped (llm-wiki/ingest (assoc context
-                                          :llm-complete
-                                            (scripted [{:role :assistant,
-                                                        :content "Redone."}]))
-                                        source
-                                        {:date "2026-06-12"})))))))
+             (:stopped
+               (with-redefs [router/completion
+                               (scripted [(step "f" "finish" {})
+                                          (cot "final_text" "r" "Redone.")])]
+                 (llm-wiki/ingest context source {:date "2026-06-12"}))))))))
 
 (deftest ingest-empty-reply-test
-  (testing "a model reply with no text and no tool calls is not a success"
+  (testing "a reply that does no work and returns no text is not a success"
     (let [context (make-context)
           source (str (temp-dir) "/notes.txt")
           _ (spit source "Raw text.")
-          result (llm-wiki/ingest (assoc context
-                                    :llm-complete (scripted [{:role :assistant,
-                                                              :content nil}]))
-                                  source
-                                  {:date "2026-06-12"})]
+          result (with-redefs [router/completion
+                                 (scripted [(step "nothing to do" "finish" {})
+                                            (cot "final_text" "r" "")])]
+                   (llm-wiki/ingest context source {:date "2026-06-12"}))]
       (is (= :empty-reply (:stopped result)))
       (is (str/includes? (fs/read-text (wiki-path context "log.md"))
-                         "- status: incomplete (empty reply)\n")))))
+                         "- status: incomplete (empty reply)
+")))))
 
 (deftest ingest-progress-test
   (testing "ingest narrates the loop through :on-progress"
-    (let [context (make-context)
+    (let [context (assoc (make-context) :on-progress identity)
           source (str (temp-dir) "/notes.txt")
           _ (spit source "Raw text.")
           messages (atom [])
-          context (assoc context
-                    :on-progress #(swap! messages conj %)
-                    :llm-complete (scripted
-                                    [(tool-call "c1"
-                                                "create_note"
-                                                {:title "Alpha", :body "Body."})
-                                     {:role :assistant, :content "Done."}]))]
-      (llm-wiki/ingest context source {:date "2026-06-11"})
+          context (assoc context :on-progress #(swap! messages conj %))]
+      (with-redefs [router/completion (scripted
+                                        [(step "make alpha"
+                                               "create_note"
+                                               {:title "Alpha", :body "Body."})
+                                         (step "done" "finish" {})
+                                         (cot "final_text" "r" "Done.")])]
+        (llm-wiki/ingest context source {:date "2026-06-11"}))
       (is (some #(str/includes? % "notes.txt") @messages))
       (is (some #(str/includes? % "round 1") @messages))
       (is (some #(str/includes? % "creating note: Alpha") @messages))
       (is (some #(str/includes? % "index") @messages)))))
 
 (deftest ingest-missing-source-test
-  (let [context (assoc (make-context)
-                  :llm-complete
-                    (fn [_] (throw (ex-info "LLM must not be called" {}))))
-        e (try (llm-wiki/ingest context "/nope/missing.txt" {})
-               (catch Exception e (ex-data e)))]
+  (let [e (with-redefs [router/completion (no-llm)]
+            (try (llm-wiki/ingest (make-context) "/nope/missing.txt" {})
+                 (catch Exception ex (ex-data ex))))]
     (is (= :validation (:type e)))))
 
 ;;; Query
@@ -633,23 +674,18 @@
 (deftest query-test
   (let [context (clean-wiki-context)
         answer (str "Alpha is the root topic; see "
-                    "[Alpha](denote:20240101T000000).")]
+                    "[Alpha](denote:20240101T000000).")
+        run (fn [opts]
+              (with-redefs [router/completion
+                              (scripted [(step "I know this" "finish" {})
+                                         (cot "final_text" "r" answer)])]
+                (llm-wiki/query context "What is alpha?" opts)))]
     (testing "prints the answer without saving"
-      (let [result (llm-wiki/query (assoc context
-                                     :llm-complete (scripted [{:role :assistant,
-                                                               :content
-                                                               answer}]))
-                                   "What is alpha?"
-                                   {:date "2026-06-11"})]
+      (let [result (run {:date "2026-06-11"})]
         (is (= answer (:answer result)))
         (is (nil? (:saved-path result)))))
     (testing "--save files the answer as a child of the first cited note"
-      (let [result (llm-wiki/query (assoc context
-                                     :llm-complete (scripted [{:role :assistant,
-                                                               :content
-                                                               answer}]))
-                                   "What is alpha?"
-                                   {:save? true, :date "2026-06-11"})
+      (let [result (run {:save? true, :date "2026-06-11"})
             saved (:saved-path result)]
         (is (some? saved))
         (is (str/includes? saved "==1=2--what-is-alpha__answer"))
@@ -667,7 +703,9 @@
 ;;; Deep lint
 
 (deftest deep-lint-test
-  (let [context (assoc (clean-wiki-context)
-                  :llm-complete (scripted [{:role :assistant,
-                                            :content "No contradictions."}]))]
-    (is (= "No contradictions." (:report (llm-wiki/deep-lint context {}))))))
+  (let [report (with-redefs [router/completion
+                               (scripted
+                                 [(step "audit" "finish" {})
+                                  (cot "final_text" "r" "No contradictions.")])]
+                 (:report (llm-wiki/deep-lint (clean-wiki-context) {})))]
+    (is (= "No contradictions." report))))

@@ -25,21 +25,20 @@
 
 (defn- silo-root [context] (fs/canonical (get-in context [:silo :path])))
 
-(defn- complete-fn
-  "The context's injected :llm-complete, or one built from config with the
-  API key resolved from the environment."
+(defn- resolve-provider
+  "Register the configured LLM provider with DSCloj and return its key. The
+  API key is resolved from the environment; absent, that is a validation
+  error naming the env var."
   [context opts]
-  (or (:llm-complete context)
-      (let [llm-config (get-in context [:config :llm])
-            env-var (:api-key-env llm-config)
-            api-key (get (:env context) env-var)]
-        (when (str/blank? api-key)
-          (throw (ex-info (str "Missing API key: set the "
-                               env-var
-                               " environment variable")
-                          {:type :validation, :env-var env-var})))
-        (llm/make-complete-fn (cond-> (assoc llm-config :api-key api-key)
-                                (:model opts) (assoc :model (:model opts)))))))
+  (let [llm-config (get-in context [:config :llm])
+        env-var (:api-key-env llm-config)
+        api-key (get (:env context) env-var)]
+    (when (str/blank? api-key)
+      (throw (ex-info
+               (str "Missing API key: set the " env-var " environment variable")
+               {:type :validation, :env-var env-var})))
+    (llm/register-provider! (cond-> (assoc llm-config :api-key api-key)
+                              (:model opts) (assoc :model (:model opts))))))
 
 (defn- max-rounds
   [context opts]
@@ -110,10 +109,21 @@
          " Finish with a one-paragraph report of what you did."))
 
 (def ^:private handoff-prompt
-  (str "Your round budget is exhausted. Reply with a short,"
-         " single-paragraph handoff note describing what remains to be done"
-       " for this source: pages not yet created, sections not yet covered,"
-         " missing cross-links. Plain text only."))
+  (str "The agent's round budget is exhausted. From its trajectory, write a"
+         " short, single-paragraph handoff note describing what remains to be"
+       " done for this source: pages not yet created, sections not yet"
+         " covered, missing cross-links. Plain text only."))
+
+(def ^:private handoff-module
+  {:inputs [{:name :trajectory,
+             :spec :string,
+             :description
+             "The agent's thoughts, tool calls, and observations."}],
+   :outputs [{:name :remaining,
+              :spec :string,
+              :description
+              "One paragraph: the work remaining for this source."}],
+   :instructions handoff-prompt})
 
 (defn- one-line
   [s]
@@ -122,16 +132,13 @@
       (when-not (str/blank? collapsed) collapsed))))
 
 (defn- handoff-note
-  "Ask the model to summarize the remaining work after an exhausted loop.
-  Best effort: nil when the extra request fails. The transcript may end
-  with an unanswered tool-call message, which providers reject — drop it."
-  [complete messages]
-  (try (let [messages (vec messages)
-             transcript (cond-> messages (:tool-calls (peek messages)) pop)]
-         (one-line (llm/complete-once complete
-                                      transcript
-                                      handoff-prompt
-                                      {:max-tokens 1024})))
+  "Summarize remaining work from the agent's TRAJECTORY via chain-of-thought.
+  Best effort: nil when the call fails or yields nothing."
+  [provider trajectory]
+  (try (one-line (:remaining (llm/chain-of-thought provider
+                                                   handoff-module
+                                                   {:trajectory trajectory}
+                                                   {:validate? false})))
        (catch Exception _ nil)))
 
 (defn- continuation-section
@@ -216,13 +223,13 @@
   (let [progress (progress-fn context)
         mtime (.toEpochMilli ^Instant (fs/file-mtime abs))
         _ (scaffold/scaffold context)
-        complete (complete-fn context opts)
+        provider (resolve-provider context opts)
         state (atom {:created [], :updated [], :default-sources [abs]})
         _ (progress (str "ingesting "
                          (basename abs)
                          (when history " (continuing a previous ingest)")))
         result (llm/run-tool-loop
-                 complete
+                 provider
                  {:system
                   (str (schema-text context) "\n\n" ingest-instructions),
                   :user (str "Source file: "
@@ -251,7 +258,7 @@
                           (empty? updated))
         remaining (when incomplete?
                     (progress "asking the model for a handoff note")
-                    (handoff-note complete (:messages result)))
+                    (handoff-note provider (:trajectory result)))
         status (cond incomplete? (str "incomplete (max-rounds after "
                                       (:rounds result)
                                       ")")
@@ -334,10 +341,10 @@
   {:save? true} the answer is filed as a note. Returns
   {:answer :saved-path :stopped}."
   [context question opts]
-  (let [complete (complete-fn context opts)
+  (let [provider (resolve-provider context opts)
         state (atom {:created [], :updated [], :default-sources []})
         result (llm/run-tool-loop
-                 complete
+                 provider
                  {:system (str (schema-text context) "\n\n" query-instructions),
                   :user (str question
                              "\n\nCurrent index:\n\n"
@@ -362,10 +369,10 @@
 (defn deep-lint
   "Audit the wiki through the read-only tool loop. Returns {:report STR}."
   [context opts]
-  (let [complete (complete-fn context opts)
+  (let [provider (resolve-provider context opts)
         state (atom {:created [], :updated [], :default-sources []})
         result (llm/run-tool-loop
-                 complete
+                 provider
                  {:system
                   (str (schema-text context) "\n\n" deep-lint-instructions),
                   :user (str "Current index:\n\n"

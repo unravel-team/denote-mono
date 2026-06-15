@@ -683,11 +683,11 @@ Commands:
     (flush)))
 
 (defn- make-llm-wiki-context
-  "Like make-context but resolved against llm-wiki silos only; carries the
-  harness's :llm-complete so tests can script the LLM. Agentic operations
-  narrate their progress to stderr whenever a human can see it: on a full
-  terminal, or with just stderr on one (stdin piped, e.g. under xargs)."
-  [global-opts {:keys [env cwd tty? stderr-tty? llm-complete]}]
+  "Like make-context but resolved against llm-wiki silos only. Agentic
+  operations narrate their progress to stderr whenever a human can see it:
+  on a full terminal, or with just stderr on one (stdin piped, e.g. under
+  xargs)."
+  [global-opts {:keys [env cwd tty? stderr-tty?]}]
   (let [cfg (load-validated-config global-opts env)]
     {:config cfg,
      :silo (silo/resolve-llm-wiki-silo cfg
@@ -697,7 +697,6 @@ Commands:
      :env env,
      :cwd cwd,
      :tty? tty?,
-     :llm-complete llm-complete,
      ;; force: prod passes a delay (the isatty probe forks a shell, so
      ;; only agentic commands should pay for it); tests pass a boolean.
      :on-progress (when (or tty? (force stderr-tty?)) stderr-progress)}))
