@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0004-enforce-silo-isolation-with-canonical-path-containment.md) | [Next ->](0006-model-all-mutations-as-plan-then-apply-data.md)
+
 ## Status
 
 Accepted

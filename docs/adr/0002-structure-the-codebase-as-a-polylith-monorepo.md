@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0001-record-architecture-decisions.md) | [Next ->](0003-port-emacs-denote-semantics-exactly-pinned-by-ported-tests.md)
+
 ## Status
 
 Accepted

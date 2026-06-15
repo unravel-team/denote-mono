@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0010-distribute-as-a-graalvm-native-image-with-build-time-clojure-initialization.md) | [Next ->](0012-run-the-llm-wiki-agent-in-process-with-deterministic-tools.md)
+
 ## Status
 
 Accepted

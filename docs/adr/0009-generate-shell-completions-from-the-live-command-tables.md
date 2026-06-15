@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0008-keep-the-cli-base-thin-with-data-returning-handlers-and-stable-exit-codes.md) | [Next ->](0010-distribute-as-a-graalvm-native-image-with-build-time-clojure-initialization.md)
+
 ## Status
 
 Accepted

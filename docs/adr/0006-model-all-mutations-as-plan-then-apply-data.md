@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0005-execute-external-tools-as-argv-vectors-with-graceful-fallbacks.md) | [Next ->](0007-rewrite-front-matter-line-preservingly-with-explicit-modes.md)
+
 ## Status
 
 Accepted

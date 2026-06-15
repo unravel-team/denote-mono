@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0006-model-all-mutations-as-plan-then-apply-data.md) | [Next ->](0008-keep-the-cli-base-thin-with-data-returning-handlers-and-stable-exit-codes.md)
+
 ## Status
 
 Accepted

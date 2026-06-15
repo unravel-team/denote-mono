@@ -2,9 +2,13 @@
 
 Date: 2026-06-11
 
+[<- Prev](0011-compute-the-version-at-build-time-and-embed-it-as-a-resource.md) | [Next ->](0013-run-the-llm-wiki-agent-on-dscloj-react.md)
+
 ## Status
 
 Accepted
+
+Amended by [13. Run the llm-wiki agent on DSCloj ReAct](0013-run-the-llm-wiki-agent-on-dscloj-react.md)
 
 ## Context
 

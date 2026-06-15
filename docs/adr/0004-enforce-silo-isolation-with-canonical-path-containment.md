@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0003-port-emacs-denote-semantics-exactly-pinned-by-ported-tests.md) | [Next ->](0005-execute-external-tools-as-argv-vectors-with-graceful-fallbacks.md)
+
 ## Status
 
 Accepted

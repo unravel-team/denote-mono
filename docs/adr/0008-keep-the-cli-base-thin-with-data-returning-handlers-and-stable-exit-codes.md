@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0007-rewrite-front-matter-line-preservingly-with-explicit-modes.md) | [Next ->](0009-generate-shell-completions-from-the-live-command-tables.md)
+
 ## Status
 
 Accepted

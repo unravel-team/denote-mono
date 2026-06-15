@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0002-structure-the-codebase-as-a-polylith-monorepo.md) | [Next ->](0004-enforce-silo-isolation-with-canonical-path-containment.md)
+
 ## Status
 
 Accepted

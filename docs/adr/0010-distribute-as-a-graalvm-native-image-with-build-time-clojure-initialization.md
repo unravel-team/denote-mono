@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+[<- Prev](0009-generate-shell-completions-from-the-live-command-tables.md) | [Next ->](0011-compute-the-version-at-build-time-and-embed-it-as-a-resource.md)
+
 ## Status
 
 Accepted
