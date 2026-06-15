@@ -4,6 +4,6 @@
  ;; release yet); bump :git/sha to move forward.
  :deps {tech.unravel/dscloj
           {:git/url "https://github.com/unravel-team/DSCloj.git"
-           :git/sha "6153566f09f07e45169402390be0625ec991a324"
+           :git/sha "1290dbdfc58c5f3264e8d166d63f5c1ea2295dc6"
            :exclusions [ch.qos.logback/logback-classic]}
         org.clojure/data.json {:mvn/version "2.5.0"}}}
