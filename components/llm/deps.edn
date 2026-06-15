@@ -1,10 +1,9 @@
 {:paths ["src"]
- ;; Pinned to a main commit (no tagged release carries the reflection and
- ;; list-shape fixes yet). Bump :git/sha to move forward. Flip to
- ;; {:local/root "/Users/nejo/src/unravel-team/litellm-clj/litellm-clj.root"}
- ;; when developing against a local litellm-clj checkout.
- :deps {tech.unravel/litellm-clj
-          {:git/url "https://github.com/unravel-team/litellm-clj.git"
-           :git/sha "dfef16193359e96badb019eba504522b06b85e79"
+ ;; DSCloj provides the agent loop (react), chain-of-thought, and predict;
+ ;; it brings litellm-clj transitively. Pinned to a main commit (no tagged
+ ;; release yet); bump :git/sha to move forward.
+ :deps {tech.unravel/dscloj
+          {:git/url "https://github.com/unravel-team/DSCloj.git"
+           :git/sha "6153566f09f07e45169402390be0625ec991a324"
            :exclusions [ch.qos.logback/logback-classic]}
         org.clojure/data.json {:mvn/version "2.5.0"}}}
