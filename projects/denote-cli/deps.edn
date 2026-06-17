@@ -1,4 +1,6 @@
-{:deps {;; Registers Clojure classes for build-time init in native-image.
+{:license {:name "GNU General Public License v3.0"
+            :url "https://www.gnu.org/licenses/gpl-3.0.txt"}
+ :deps {;; Registers Clojure classes for build-time init in native-image.
         com.github.clj-easy/graal-build-time {:mvn/version "1.0.5"}
         denote-mono/cli {:local/root "../../bases/cli"}
         denote-mono/config {:local/root "../../components/config"}

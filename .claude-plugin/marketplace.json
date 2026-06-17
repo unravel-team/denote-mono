@@ -19,7 +19,7 @@
         "url": "https://github.com/vedang"
       },
       "repository": "https://github.com/vedang/denote-mono",
-      "license": "UNLICENSED",
+      "license": "GPL-3.0-only",
       "keywords": [
         "denote",
         "llm-wiki",

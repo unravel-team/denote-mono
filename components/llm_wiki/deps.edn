@@ -1,4 +1,6 @@
 {:paths ["src"]
+ :license {:name "GNU General Public License v3.0"
+           :url "https://www.gnu.org/licenses/gpl-3.0.txt"}
  :deps {denote-mono/config {:local/root "../config"}
         denote-mono/file-type {:local/root "../file_type"}
         denote-mono/filename {:local/root "../filename"}

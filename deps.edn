@@ -1,5 +1,7 @@
 ;;; How to start a development REPL: `clojure -M:dev:test`
-{:deps {org.clojure/clojure {:mvn/version "1.12.0"}}
+{:license {:name "GNU General Public License v3.0"
+            :url "https://www.gnu.org/licenses/gpl-3.0.txt"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases
  {:dev
   {:extra-deps
