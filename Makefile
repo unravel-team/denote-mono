@@ -111,3 +111,9 @@ release-minor: ## Bump the minor version and commit the bump
 release-major: ## Bump the major version (minor resets to 0) and commit the bump
 	@major=$$(perl -ne 'print $$1 if /:major-version (\d+)/' $(VERSION_DEPS)); \
 	$(call commit_version_bump,$$((major + 1)),0)
+
+.PHONY: current-version
+current-version: ## Bump the major version (minor resets to 0) and commit the bump
+	@major=$$(perl -ne 'print $$1 if /:major-version (\d+)/' $(VERSION_DEPS)); \
+	minor=$$(perl -ne 'print $$1 if /:minor-version (\d+)/' $(VERSION_DEPS)); \
+	echo "$$major.$$minor.$$(git rev-list --count HEAD 2>/dev/null || echo '?')"
