@@ -1,11 +1,10 @@
 {:paths ["src"]
  :license {:name "GNU General Public License v3.0"
            :url "https://www.gnu.org/licenses/gpl-3.0.txt"}
- ;; DSCloj provides the agent loop (react), chain-of-thought, and predict;
- ;; it brings litellm-clj transitively. Pinned to a main commit (no tagged
- ;; release yet); bump :git/sha to move forward.
+ ;; DSCloj provides the agent loop (react), chain-of-thought, and predict.
+ ;; Temporarily source it locally so its local litellm-clj provider changes are
+ ;; available before upstream PRs are merged.
  :deps {tech.unravel/dscloj
-          {:git/url "https://github.com/unravel-team/DSCloj.git"
-           :git/sha "1290dbdfc58c5f3264e8d166d63f5c1ea2295dc6"
+          {:local/root "/Users/nejo/src/unravel-team/DSCloj/DSCloj.root"
            :exclusions [ch.qos.logback/logback-classic]}
         org.clojure/data.json {:mvn/version "2.5.0"}}}
