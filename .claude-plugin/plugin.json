@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "llm-wiki-capture",
+  "version": "0.1.0",
+  "description": "Capture knowledge into denote-mono's denote llm-wiki using durable source packets and the ingest CLI.",
+  "author": {
+    "name": "Vedang Manerikar",
+    "url": "https://github.com/vedang"
+  },
+  "repository": "https://github.com/vedang/denote-mono",
+  "license": "UNLICENSED",
+  "skills": [
+    "./.agents/skills/llm-wiki-capture"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "name": "denote-mono",
+  "owner": {
+    "name": "Vedang Manerikar",
+    "url": "https://github.com/vedang"
+  },
+  "metadata": {
+    "description": "Skill package for capturing conversation knowledge into denote llm-wiki.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "llm-wiki-capture",
+      "source": "./",
+      "description": "Capture knowledge into denote-mono's denote llm-wiki using durable source packets and the ingest CLI.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Vedang Manerikar",
+        "url": "https://github.com/vedang"
+      },
+      "repository": "https://github.com/vedang/denote-mono",
+      "license": "UNLICENSED",
+      "keywords": [
+        "denote",
+        "llm-wiki",
+        "knowledge-capture",
+        "documentation"
+      ],
+      "category": "documentation",
+      "tags": [
+        "denote",
+        "llm-wiki",
+        "knowledge-capture"
+      ]
+    }
+  ]
+}

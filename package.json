@@ -1,0 +1,24 @@
+{
+  "name": "denote-mono",
+  "version": "0.1.0",
+  "description": "Pi and Claude Code skill package for capturing conversation knowledge into denote llm-wiki.",
+  "keywords": [
+    "pi-package",
+    "claude-plugin",
+    "pi",
+    "skill",
+    "denote",
+    "llm-wiki"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/vedang/denote-mono.git"
+  },
+  "homepage": "https://github.com/vedang/denote-mono",
+  "license": "UNLICENSED",
+  "pi": {
+    "skills": [
+      "./.agents/skills"
+    ]
+  }
+}
