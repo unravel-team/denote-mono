@@ -162,8 +162,9 @@
     (boolean (and (= "complete" status)
                   (or (and source-hash (= source-hash current-hash))
                       (if source-mtime
-                        (= current-mtime (parse-long source-mtime))
-                        (when date
+                        (and current-mtime
+                             (= current-mtime (parse-long source-mtime)))
+                        (when (and current-mtime date)
                           (< current-mtime
                              (-> (LocalDate/parse date)
                                  (.atStartOfDay (ZoneId/systemDefault))
@@ -187,15 +188,14 @@
 
 (declare run-ingest)
 
-(defn ingest
-  "Distill SOURCE-PATH into the wiki through the agentic tool loop, then
-  refresh the index and the log. A source whose latest log entry is
-  complete and unchanged since is skipped outright
-  (:stopped :skipped) — no LLM call, no new log entry; :fresh? overrides.
+(defn ingest-prepared
+  "Distill already prepared SOURCE into the wiki through the agentic tool
+  loop, then refresh the index and the log. A source whose latest log entry
+  is complete and unchanged since is skipped outright (:stopped :skipped) —
+  no LLM call, no new log entry; :fresh? overrides.
   Returns {:created :updated :final-text :rounds :stopped :remaining}."
-  [context source-path opts]
-  (let [prepared (source/prepare-source context source-path opts)
-        progress (progress-fn context)
+  [context prepared opts]
+  (let [progress (progress-fn context)
         history (when-not (:fresh? opts)
                   (scaffold/ingest-history context (:uri prepared)))]
     (if (and history (unchanged-since-ingest? history prepared))
@@ -204,6 +204,13 @@
                          " (unchanged since last ingest)"))
           skipped-result)
       (run-ingest context prepared opts history))))
+
+(defn ingest
+  "Prepare SOURCE-PATH and distill it into the wiki."
+  [context source-path opts]
+  (ingest-prepared context
+                   (source/prepare-source context source-path opts)
+                   opts))
 
 (defn- run-ingest
   [context source opts history]
@@ -221,9 +228,12 @@
                  provider
                  {:system
                   (str (schema-text context) "\n\n" ingest-instructions),
-                  :user (str "Source file: "
+                  :user (str "Source: "
                              (:uri source)
-                             "\n\n"
+                             "\n"
+                             "Source type: "
+                             (name (:kind source))
+                             "\n\nExtracted text:\n\n"
                              (:content source)
                              (when history
                                (str "\n\n" (continuation-section history)))
@@ -263,11 +273,16 @@
        :details (concat [(str "source: " (:uri source))
                          (str "source-kind: " (name (:kind source)))
                          (str "source-hash: " (:sha256 fingerprint))
-                         (str "status: " status)
-                         ;; Captured before the run: a file edited while
-                         ;; ingesting will mismatch and reprocess next
-                         ;; time.
-                         (str "source-mtime: " mtime)]
+                         (str "status: " status)]
+                        ;; Captured before the run: a file edited while
+                        ;; ingesting will mismatch and reprocess next time.
+                        (when mtime [(str "source-mtime: " mtime)])
+                        (when-let [etag (:etag fingerprint)]
+                          [(str "source-etag: " etag)])
+                        (when-let [last-modified (:last-modified fingerprint)]
+                          [(str "source-last-modified: " last-modified)])
+                        (when-let [final-url (:final-url fingerprint)]
+                          [(str "source-final-url: " final-url)])
                         (map #(str "created: " %) created)
                         (map #(str "updated: " %) updated)
                         (when remaining [(str "remaining: " remaining)]))})

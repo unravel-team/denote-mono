@@ -5,6 +5,7 @@
             [denote-mono.config.interface :as config]
             [denote-mono.filesystem.interface :as fs]
             [denote-mono.llm-wiki.interface :as llm-wiki]
+            [denote-mono.llm-wiki.source :as source]
             [litellm.router :as router])
   (:import (java.io File)
            (java.nio.file Files)
@@ -109,6 +110,18 @@
     (.setLastModified file (+ (.lastModified file) 1000))))
 
 (defn- no-llm [] (fn [& _] (throw (ex-info "LLM must not be called" {}))))
+
+(defn- fake-url-source
+  [url content]
+  {:input url,
+   :kind :url,
+   :uri url,
+   :display-name "article",
+   :content content,
+   :fingerprint {:sha256 (source/sha256 content),
+                 :etag "\"v1\"",
+                 :last-modified "Tue, 18 Jun 2024 10:00:00 GMT",
+                 :final-url url}})
 
 ;;; Scaffold
 
@@ -233,7 +246,15 @@
       (let [result (execute "create_note"
                             {:title "Beta Topic", :body "Beta body."})]
         (is (str/includes? (fs/read-text (wiki-path context (:path result)))
-                           (str "(file:" (fs/canonical source) ")")))))))
+                           (str "(file:" (fs/canonical source) ")")))))
+    (testing "URL source paths are kept as URL links"
+      (let [url "https://example.com/article"
+            result (execute "create_note"
+                            {:title "URL Topic",
+                             :body "URL body.",
+                             :source_paths [url]})]
+        (is (str/includes? (fs/read-text (wiki-path context (:path result)))
+                           (str "(" url ")")))))))
 
 (deftest execute-tool-string-keywords-test
   (testing "keywords sent as one string are split, not char-exploded"
@@ -278,8 +299,34 @@
         (is (not (str/includes? content "Old body."))))
       (testing "old source links survive and new ones are added"
         (is (str/includes? content (str "(file:" old-source ")")))
-        (is (str/includes? content (str "(file:" new-source ")")))))
+        (is (str/includes? content
+                           (str "(file:" (fs/canonical new-source) ")")))))
     (is (= [relative] (:updated @state)))))
+
+(deftest execute-tool-update-note-url-sources-test
+  (let [context (make-context)
+        old-url "https://example.com/old"
+        new-url "http://example.com/new"
+        note (write-note! context
+                          {:id "20240101T000000",
+                           :sig "1",
+                           :title "Alpha",
+                           :keywords ["ml"],
+                           :body (str "Old body.\n\n## Sources\n\n- [old]("
+                                      old-url
+                                      ")\n")})
+        state (atom {:created [], :updated [], :default-sources []})
+        execute (llm-wiki/make-execute-tool context state)
+        relative (subs note (inc (count (get-in context [:silo :path]))))]
+    (execute "update_note"
+             {:path relative,
+              :body "New body with [ordinary URL](https://example.com/body).",
+              :add_source_paths [new-url]})
+    (let [content (fs/read-text note)
+          sources (subs content (str/index-of content "## Sources"))]
+      (is (str/includes? sources (str "(" old-url ")")))
+      (is (str/includes? sources (str "(" new-url ")")))
+      (is (not (str/includes? sources "https://example.com/body"))))))
 
 (deftest execute-tool-read-and-list-test
   (let [context (make-context)
@@ -324,6 +371,12 @@
                    (execute "update_note" {:path "index.md", :body "hi"}))))
     (testing "paths escaping the silo are rejected"
       (is (thrown? Exception (execute "read_note" {:path "../escape.md"}))))
+    (testing "relative source refs are not persisted"
+      (is (thrown? Exception
+                   (execute "create_note"
+                            {:title "Bad Source",
+                             :body "Body.",
+                             :source_paths ["relative.txt"]}))))
     (testing "unknown tools are rejected"
       (is (thrown? Exception (execute "explode" {}))))))
 
@@ -410,6 +463,30 @@
           (is (= 1 (count suspicious)))
           (is (str/includes? (:detail (first suspicious))
                              "PLACEHOLDER_CONFIG")))))))
+
+(deftest lint-url-source-and-citation-test
+  (let [context (make-context)]
+    (llm-wiki/scaffold context)
+    (write-note! context
+                 {:id "20240101T000000",
+                  :sig "1",
+                  :title "Alpha",
+                  :keywords ["ml"],
+                  :body (str "Alpha cites [Beta](denote:20240102T000000)."
+                             "\n\n## Sources\n\n"
+                             "- [article](https://example.com/article)\n")})
+    (write-note! context
+                 {:id "20240102T000000",
+                  :sig "1=1",
+                  :title "Beta",
+                  :keywords [],
+                  :body (str "Beta cites [Alpha](denote:20240101T000000)."
+                             "\n\n# Citations\n\n"
+                             "- [paper](http://example.com/paper)\n")})
+    (llm-wiki/regenerate-index context)
+    (let [checks (problem-checks (llm-wiki/lint context {}))]
+      (is (not (contains? checks :missing-source)))
+      (is (not (contains? checks :source-missing-on-disk))))))
 
 (deftest lint-fix-test
   (let [context (clean-wiki-context)]
@@ -530,6 +607,72 @@
         (is (nil? (:remaining history)))))
     (testing "ingest-history is nil for never-ingested sources"
       (is (nil? (llm-wiki/ingest-history context "/nope/other.txt"))))))
+
+(deftest ingest-url-source-test
+  (let [context (make-context)
+        url "https://example.com/article"
+        prepared (fake-url-source url "Fetched URL text about alpha.")
+        requests (atom [])
+        result (with-redefs [source/prepare-source (fn [_ source-path _]
+                                                     (is (= url source-path))
+                                                     prepared)
+                             router/completion
+                               (scripted [(step "create alpha"
+                                                "create_note"
+                                                {:title "Alpha",
+                                                 :keywords ["web"],
+                                                 :body "Alpha URL note."})
+                                          (step "done" "finish" {})
+                                          (cot "final_text"
+                                               "reasoned"
+                                               "Created URL page.")]
+                                         requests)]
+                 (llm-wiki/ingest context url {:date "2026-06-13"}))]
+    (is (= :done (:stopped result)))
+    (testing "prompt identifies URL source metadata and extracted text"
+      (let [prompt (first-prompt requests)]
+        (is (str/includes? prompt (str "Source: " url)))
+        (is (str/includes? prompt "Source type: url"))
+        (is (str/includes? prompt "Extracted text:"))
+        (is (str/includes? prompt "Fetched URL text"))))
+    (testing "created note links to the URL source"
+      (is (str/includes? (fs/read-text (wiki-path context
+                                                  (first (:created result))))
+                         (str "(" url ")"))))
+    (testing "log and history use URL source identity and hash metadata"
+      (let [log (fs/read-text (wiki-path context "log.md"))
+            history (llm-wiki/ingest-history context url)]
+        (is (str/includes? log (str "- source: " url "\n")))
+        (is (str/includes? log "- source-kind: url\n"))
+        (is (str/includes? log "- source-etag: \"v1\"\n"))
+        (is (not (str/includes? log "source-mtime: nil")))
+        (is (= "complete" (:status history)))
+        (is (= "url" (:source-kind history)))
+        (is (= (get-in prepared [:fingerprint :sha256]) (:source-hash history)))
+        (is (= "\"v1\"" (:source-etag history)))))
+    (testing "same URL hash skips without an LLM call"
+      (let [skipped (with-redefs [source/prepare-source (fn [& _] prepared)
+                                  router/completion (no-llm)]
+                      (llm-wiki/ingest context url {:date "2026-06-14"}))]
+        (is (= :skipped (:stopped skipped)))))))
+
+(deftest ingest-history-url-scopes-to-ingest-test
+  (let [context (make-context)
+        url "https://example.com/article"]
+    (llm-wiki/scaffold context)
+    (llm-wiki/append-log context
+                         {:date "2026-06-12",
+                          :op "export-okf",
+                          :title "bundle",
+                          :details [(str "source: " url) "status: complete"]})
+    (is (nil? (llm-wiki/ingest-history context url)))
+    (llm-wiki/append-log context
+                         {:date "2026-06-13",
+                          :op "ingest",
+                          :title "article",
+                          :details [(str "source: " url) "source-kind: url"
+                                    "source-hash: abc123" "status: complete"]})
+    (is (= "abc123" (:source-hash (llm-wiki/ingest-history context url))))))
 
 (deftest ingest-dedupes-log-test
   (testing "repeated updates of one note collapse to one log line"

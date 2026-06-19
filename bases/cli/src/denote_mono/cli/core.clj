@@ -60,7 +60,7 @@ Commands:
   seq convert FILE... --to SCHEME [--dry-run --yes]
   seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
   seq as-parent FILE [--dry-run]
-  llm-wiki ingest FILE...  Distill source files into the LLM wiki
+  llm-wiki ingest SOURCE...  Distill source files or URLs into the LLM wiki
   llm-wiki query QUESTION  Answer a question from the LLM wiki (--save)
   llm-wiki lint            Check LLM wiki health (--fix --deep)
   silo list        List configured silos
@@ -509,7 +509,7 @@ Commands:
     :description "Create a note",
     :options new-options}
    {:name "llm-wiki",
-    :usage "llm-wiki ingest FILE... | query QUESTION | lint [OPTIONS]",
+    :usage "llm-wiki ingest SOURCE... | query QUESTION | lint [OPTIONS]",
     :description "LLM-maintained wiki operations",
     :options llm-wiki-options,
     :subcommands ["ingest" "lint" "query"]}
@@ -729,9 +729,9 @@ Commands:
   {:failed? BOOL :lines [STR]}."
   [context options llm-opts source]
   (let [{:keys [created updated final-text rounds stopped]}
-          (llm-wiki/ingest context
-                           source
-                           (assoc llm-opts :fresh? (:fresh options)))]
+          (llm-wiki/ingest-prepared context
+                                    source
+                                    (assoc llm-opts :fresh? (:fresh options)))]
     (cond (= stopped :skipped)
             {:failed? false,
              :lines ["Skipped (complete and unchanged since last ingest)"]}
@@ -754,17 +754,18 @@ Commands:
 
 (defn- handle-ingest
   "Ingest SOURCES sequentially, each through its own tool loop. All
-  sources are validated up front so a bad path fails the batch before
+  sources are prepared up front so a bad source fails the batch before
   the first LLM call. Any incomplete source fails the whole run."
   [context options llm-opts sources]
-  (run! #(llm-wiki/prepare-source context % {}) sources)
-  (let [results (mapv #(ingest-source context options llm-opts %) sources)
-        multi? (< 1 (count sources))
+  (let [prepared (mapv #(llm-wiki/prepare-source context % {}) sources)
+        results (mapv #(ingest-source context options llm-opts %) prepared)
+        multi? (< 1 (count prepared))
         blocks (map (fn [source {:keys [lines]}]
-                      (str/join
-                        "\n"
-                        (if multi? (cons (str source ":") lines) lines)))
-                 sources
+                      (str/join "\n"
+                                (if multi?
+                                  (cons (str (:input source) ":") lines)
+                                  lines)))
+                 prepared
                  results)]
     {:exit
      (if (some :failed? results) (exit-codes :tool) (exit-codes :success)),
@@ -783,7 +784,7 @@ Commands:
           "ingest" (if (seq rest-args)
                      (handle-ingest context options llm-opts rest-args)
                      {:exit (exit-codes :usage),
-                      :out "Usage: denote llm-wiki ingest FILE..."})
+                      :out "Usage: denote llm-wiki ingest SOURCE..."})
           "query"
             (if-let [question (first rest-args)]
               (let [{:keys [answer saved-path stopped]}
@@ -805,7 +806,7 @@ Commands:
           "lint" (handle-llm-wiki-lint context options)
           {:exit (exit-codes :usage),
            :out
-           "Usage: denote llm-wiki ingest FILE... | query QUESTION | lint"})))))
+           "Usage: denote llm-wiki ingest SOURCE... | query QUESTION | lint"})))))
 
 (defn- handle-silo
   [global-opts {:keys [env]} args]

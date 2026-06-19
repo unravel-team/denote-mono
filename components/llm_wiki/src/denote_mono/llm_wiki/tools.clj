@@ -76,7 +76,7 @@
       :source_paths {:type "array",
                      :items {:type "string"},
                      :description
-                     (str "Absolute paths of the raw sources this note"
+                     (str "Source URIs or absolute paths that this note"
                           " distills; defaults to the sources of the"
                           " current operation.")}},
      :required ["title" "body"]}}})
@@ -103,7 +103,8 @@
                 :add_source_paths
                 {:type "array",
                  :items {:type "string"},
-                 :description "Absolute paths of additional raw sources."}},
+                 :description
+                 "Source URIs or absolute paths of additional raw sources."}},
                :required ["path" "body"]}}})
 
 (defn tool-schemas
@@ -136,34 +137,91 @@
                       {:type :validation, :path path})))
     resolved))
 
-(defn- normalized-source-path
-  [path]
-  (when (seq path) (source/file-uri-path path)))
+(defn source-uri?
+  "True when REF is a supported llm-wiki source URI."
+  [ref]
+  (let [ref (str ref)] (or (source/url? ref) (str/starts-with? ref "file:"))))
 
-(defn- canonical-source-path
-  [path]
-  (when (seq path) (fs/canonical (normalized-source-path path))))
+(defn normalize-source-ref
+  "Normalize an already persisted source ref. URLs and existing file: URIs stay
+  unchanged; local paths become file: URIs without further canonicalization."
+  [ref]
+  (let [ref (some-> ref
+                    str/trim)]
+    (when-not (str/blank? ref)
+      (cond (source/url? ref) ref
+            (str/starts-with? ref "file:") ref
+            :else (str "file:" (source/file-uri-path ref))))))
+
+(defn- canonical-source-ref
+  "Normalize a newly supplied tool source ref to a persisted URI."
+  [ref]
+  (let [ref (some-> ref
+                    str/trim)]
+    (when-not (str/blank? ref)
+      (if (source/url? ref)
+        ref
+        (let [path (source/file-uri-path ref)]
+          (when-not (.isAbsolute (java.io.File. ^String path))
+            (throw (ex-info (str "Source path must be absolute or a URI: " ref)
+                            {:type :validation, :source ref})))
+          (source/file-uri ref))))))
+
+(defn- source-label [uri] (source/display-name uri))
 
 ;; Built with re-pattern so the source never contains a literal org-style
 ;; file link opener, which tagref would try to validate as a reference.
 (def ^:private org-file-link-pattern
   (re-pattern (str "\\[\\[file" ":([^\\]]+)\\]")))
 
+(def ^:private md-source-link-pattern
+  #"\[[^\]]*\]\((file:[^)]+|https?://[^)]+)\)")
+
+(defn source-link-targets
+  "All file:/http:/https: source link targets in CONTENT."
+  [content]
+  (concat (map second (re-seq md-source-link-pattern content))
+          (map #(str "file:" (second %))
+            (re-seq org-file-link-pattern content))))
+
 (defn file-link-targets
   "All file: link targets in CONTENT, in markdown and org link form."
   [content]
-  (concat (map second (re-seq #"\(file:([^)]+)\)" content))
-          (map second (re-seq org-file-link-pattern content))))
+  (keep (fn [uri]
+          (when (str/starts-with? uri "file:") (source/file-uri-path uri)))
+        (source-link-targets content)))
+
+(defn- heading-title
+  [line]
+  (some-> (second (re-find #"^\s{0,3}#{1,6}\s+(.+?)\s*$" line))
+          str/lower-case))
+
+(defn- provenance-section-lines
+  [content]
+  (let [wanted? #{"sources" "citations"}]
+    (loop [[line & more] (str/split-lines content)
+           in-section? false
+           acc []]
+      (if (nil? line)
+        acc
+        (if-let [heading (heading-title line)]
+          (recur more (contains? wanted? heading) acc)
+          (recur more in-section? (if in-section? (conj acc line) acc)))))))
+
+(defn provenance-link-targets
+  "Source URI links from ## Sources or # Citations sections."
+  [content]
+  (source-link-targets (str/join "\n" (provenance-section-lines content))))
 
 (defn sources-section
-  "A \"## Sources\" markdown section linking PATHS, nil when PATHS is
+  "A \"## Sources\" markdown section linking source REFS, nil when REFS is
   empty."
-  [paths]
-  (let [targets (remove nil? (map normalized-source-path paths))]
-    (when (seq targets)
+  [refs]
+  (let [uris (remove nil? (map normalize-source-ref refs))]
+    (when (seq uris)
       (apply str
         "\n\n## Sources\n\n"
-        (map (fn [p] (str "- [" (basename p) "](file:" p ")\n")) targets)))))
+        (map (fn [uri] (str "- [" (source-label uri) "](" uri ")\n")) uris)))))
 
 (defn silo-sequences
   "All valid sequences among the silo's notes."
@@ -225,7 +283,7 @@
                     (sequence/next-child sequences parent_sequence scheme)
                     (sequence/next-parent sequences scheme))
         raw-sources (or (not-empty source_paths) (:default-sources @state))
-        sources (mapv canonical-source-path raw-sources)
+        sources (mapv canonical-source-ref raw-sources)
         plan (note/plan-new {:title title,
                              :keywords (normalize-keywords keywords),
                              :signature signature,
@@ -253,13 +311,13 @@
                    :markdown-yaml)
           [front _] (index/split-front-matter type old)
           new-body (str/trim body)
-          kept (let [kept (remove (set (map normalized-source-path
-                                         (file-link-targets new-body)))
-                            (map normalized-source-path
-                              (file-link-targets old)))]
+          kept (let [kept (remove (set (map normalize-source-ref
+                                         (provenance-link-targets new-body)))
+                            (map normalize-source-ref
+                              (provenance-link-targets old)))]
                  (remove nil? kept))
           sources (vec (distinct (concat kept
-                                         (map normalized-source-path
+                                         (map canonical-source-ref
                                            add_source_paths))))
           content (str front "\n" new-body (sources-section sources))
           relative (relative-to root abs)]

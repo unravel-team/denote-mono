@@ -7,6 +7,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [denote-mono.cli.core :as cli]
+            [denote-mono.llm-wiki.source :as source]
             [litellm.router :as router])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -86,6 +87,16 @@
 
 (defn- no-llm [] (fn [& _] (throw (ex-info "LLM must not be called" {}))))
 
+(defn- fake-url-source
+  [url]
+  (let [content "Fetched CLI URL text."]
+    {:input url,
+     :kind :url,
+     :uri url,
+     :display-name "article",
+     :content content,
+     :fingerprint {:sha256 (source/sha256 content), :final-url url}}))
+
 (deftest ingest-command
   (testing "ingest runs the loop and reports created notes"
     (let [{:keys [exit out]}
@@ -120,11 +131,12 @@
             (with-redefs [router/completion (no-llm)]
               (run-cli *harness* "llm-wiki" "ingest" "/nope/missing.txt"))]
       (is (= 3 exit))))
-  (testing "no FILE argument is a usage error"
+  (testing "no SOURCE argument is a usage error"
     (let [{:keys [exit out]} (with-redefs [router/completion (no-llm)]
                                (run-cli *harness* "llm-wiki" "ingest"))]
       (is (= 2 exit))
-      (is (str/includes? out "Usage"))))
+      (is (str/includes? out "Usage"))
+      (is (str/includes? out "SOURCE"))))
   (testing "exhausting --max-rounds maps to the tool exit code"
     (spit *raw-source* "Raw source text for max-rounds failure.")
     (let [{:keys [exit out]}
@@ -159,6 +171,29 @@
               (run-cli *harness* "llm-wiki" "ingest" *raw-source* "--fresh"))]
       (is (zero? exit)))))
 
+(deftest ingest-url-source
+  (testing "HTTP/HTTPS sources pass CLI prevalidation and ingest normally"
+    (let [url "https://example.com/article"
+          calls (atom 0)
+          {:keys [exit out]}
+            (with-redefs [source/prepare-source (fn [_ source-path _]
+                                                  (swap! calls inc)
+                                                  (is (= url source-path))
+                                                  (fake-url-source source-path))
+                          router/completion
+                            (scripted
+                              [(step "make alpha"
+                                     "create_note"
+                                     {:title "Alpha",
+                                      :keywords ["web"],
+                                      :body "Alpha from URL."})
+                               (step "done" "finish" {})
+                               (cot "final_text" "r" "Filed URL source.")])]
+              (run-cli *harness* "llm-wiki" "ingest" url))]
+      (is (zero? exit))
+      (is (= 1 @calls))
+      (is (str/includes? out "Filed URL source.")))))
+
 (deftest ingest-expands-home-source
   (testing "quoted ~/ paths pass CLI prevalidation and ingest normally"
     (let [{:keys [exit out]}
@@ -178,7 +213,7 @@
 (deftest ingest-multiple-sources
   (let [source2 (str (temp-dir "denote-llm-wiki-src2") "/second.txt")]
     (spit source2 "Second source text.")
-    (testing "several FILE arguments ingest sequentially, labeled per source"
+    (testing "several SOURCE arguments ingest sequentially, labeled per source"
       (let [{:keys [exit out]}
               (with-redefs [router/completion
                               (scripted [(step "one"
@@ -350,7 +385,7 @@
       (is (str/includes? out "Usage"))))
   (testing "help mentions llm-wiki"
     (let [{:keys [out]} (run-cli *harness* "help")]
-      (is (str/includes? out "llm-wiki ingest FILE"))))
+      (is (str/includes? out "llm-wiki ingest SOURCE"))))
   (testing "completions know the command and its options"
     (let [{:keys [out]} (run-cli *harness* "completions" "bash")]
       (is (str/includes? out "llm-wiki"))

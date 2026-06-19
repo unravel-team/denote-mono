@@ -216,16 +216,17 @@ an LLM incrementally maintains a wiki of interlinked Denote notes
 distilled from your raw sources. Sources stay immutable; the wiki
 compounds. Every wiki note is a real Denote file with a sequence,
 keywords, dense `denote:` cross-links, and a `## Sources` section linking
-back to the raw files it came from. Three machine-maintained files live
-at the silo root: `index.md` (generated catalog — never edit), `log.md`
+back to the source files or URLs it came from. Three machine-maintained
+files live at the silo root: `index.md` (generated catalog — never edit), `log.md`
 (append-only history), and `wiki-schema.md` (the conventions fed to the
 model).
 
 ```sh
 export ANTHROPIC_API_KEY=...      # or configure :llm in config.edn
 
-# index any files; the sources themselves are never touched
+# index files or HTTP/HTTPS URLs; the sources themselves are never touched
 denote llm-wiki ingest ~/notes/lecture-transcript.txt
+denote llm-wiki ingest http://sunnyday.mit.edu/16.355/parnas-criteria.html
 denote llm-wiki ingest chapter-1.md chapter-2.md chapter-3.md
 
 # pipe a note query into a batch ingest
@@ -243,8 +244,8 @@ denote llm-wiki lint --deep
 ```
 
 Several sources ingest sequentially, each through its own conversation;
-all paths are validated up front, so a typo costs no API calls. With
-more than one source the report labels each block with its path, and
+all files/URLs are prepared up front, so a typo or failed fetch costs no
+API calls. With more than one source the report labels each block with its source, and
 the run exits non-zero if any source was left incomplete — re-run the
 command and the finished sources are cheap no-ops while the unfinished
 ones resume. `ingest` narrates its progress to stderr as the model works
@@ -262,13 +263,13 @@ tells the model which pages already exist from that source and what the
 handoff note said. Pass `--fresh` to ignore the history and ingest from
 scratch.
 
-Ingestion is also idempotent: each entry records the source file's
-mtime, and a source whose latest entry is `complete` and whose file is
-unchanged since is skipped without any LLM call. Re-running a whole
-batch therefore only costs API calls for the sources that are new,
-changed, or unfinished. (Entries written before mtimes were recorded
-skip when the file provably predates the entry's day.) `--fresh`
-overrides the skip too. The model works through a constrained tool loop: it can list, read,
+Ingestion is also idempotent: each entry records a hash of the prepared
+source text; local files also record mtime for legacy compatibility. A
+source whose latest entry is `complete` and whose hash is unchanged is
+skipped without any LLM call. Re-running a whole batch therefore only
+costs API calls for the sources that are new, changed, or unfinished.
+(Entries written before mtimes were recorded skip when the file provably
+predates the entry's day.) `--fresh` overrides the skip too. The model works through a constrained tool loop: it can list, read,
 search, create, and update wiki notes, but filenames, identifiers, and
 sequence numbers are always assigned by denote itself, and
 `index.md`/`log.md` are off-limits to it (ADR 12).
@@ -306,7 +307,7 @@ seq list|tree [SEQ] [--depth N]
 seq convert FILE... --to SCHEME [--dry-run --yes]
 seq reparent FILE TARGET-SEQ [--recursive --dry-run --yes]
 seq as-parent FILE
-llm-wiki ingest FILE...   Distill sources into the LLM wiki silo;
+llm-wiki ingest SOURCE... Distill file or URL sources into the LLM wiki;
                           re-running continues an interrupted ingest
                           (--fresh starts over)
 llm-wiki query QUESTION   Answer from the wiki (--save files it back)

@@ -6,6 +6,7 @@
             [denote-mono.filesystem.interface :as fs]
             [denote-mono.llm-wiki.index :as index]
             [denote-mono.llm-wiki.scaffold :as scaffold]
+            [denote-mono.llm-wiki.source :as source]
             [denote-mono.llm-wiki.tools :as tools]
             [denote-mono.search.interface :as search]
             [denote-mono.sequence.interface :as sequence]))
@@ -45,16 +46,17 @@
   [notes texts]
   (mapcat (fn [{:keys [path relative-path]}]
             (when-let [text (texts path)]
-              (let [targets (tools/file-link-targets text)]
+              (let [targets (tools/provenance-link-targets text)]
                 (if (empty? targets)
-                  [(problem :missing-source
-                            relative-path
-                            "no file: source link")]
+                  [(problem :missing-source relative-path "no source link")]
                   (for [target targets
-                        :when (not (fs/exists? target))]
+                        :let [uri (tools/normalize-source-ref target)]
+                        :when (and (str/starts-with? uri "file:")
+                                   (not (fs/exists? (source/file-uri-path
+                                                      uri))))]
                     (problem :source-missing-on-disk
                              relative-path
-                             (str "source not on disk: " target)))))))
+                             (str "source not on disk: " uri)))))))
     notes))
 
 (def ^:private md-link-pattern #"\[[^\]]*\]\(([^)]+)\)")

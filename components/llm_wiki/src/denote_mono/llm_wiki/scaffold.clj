@@ -17,17 +17,18 @@
 
 (def schema-content
   (str
-    "# Wiki Schema\n\n" "Conventions for this LLM-maintained wiki.\n\n"
-    "## Layers\n\n"
-      "1. Raw sources: immutable files outside this silo, only ever linked.\n"
-    "2. Wiki notes: Denote files in this silo, maintained by an LLM.\n"
-      "3. This schema document, which defines the conventions.\n\n"
-    "## Notes\n\n" "- Notes are markdown files with YAML front matter, named\n"
-    "  `ID==SEQUENCE--title__keywords.md`.\n"
-      "- Placement follows Folgezettel: children refine their parents,\n"
-    "  so `1=1` elaborates on `1`.\n"
-      "- Every note ends with a `## Sources` section of `[name](file:/abs/path)`\n"
-    "  links back to the raw sources. Never remove them.\n"
+    "# Wiki Schema\n\n"
+    "Conventions for this LLM-maintained wiki.\n\n" "## Layers\n\n"
+    "1. Raw sources: immutable files or URLs outside this silo, only ever linked.\n"
+      "2. Wiki notes: Denote files in this silo, maintained by an LLM.\n"
+    "3. This schema document, which defines the conventions.\n\n" "## Notes\n\n"
+    "- Notes are markdown files with YAML front matter, named\n"
+      "  `ID==SEQUENCE--title__keywords.md`.\n"
+    "- Placement follows Folgezettel: children refine their parents,\n"
+      "  so `1=1` elaborates on `1`.\n"
+    "- Every note ends with a `## Sources` section of normalized source URI\n"
+      "  links like `[name](file:/abs/path)` or `[name](https://example)`.\n"
+    "  Never remove them.\n"
       "- Cross-link densely with `[title](denote:ID)` links.\n"
     "- Link only to identifiers that exist. Never write placeholder link\n"
       "  targets; create a page first, then link to it.\n"
@@ -65,20 +66,19 @@
   [entry key]
   (mapv second (re-seq (re-pattern (str "(?m)^- " key ": (.*)$")) entry)))
 
-(defn- source-ref
-  [source-path]
-  (str "file:" (fs/canonical (source/file-uri-path source-path))))
+(defn- normalize-source-ref [ref] (source/source-uri ref))
 
 (defn ingest-history
-  "The latest log.md ingest entry for SOURCE-PATH, as
+  "The latest log.md ingest entry for SOURCE-REF, as
   {:date STR-or-nil :status STR-or-nil :source-kind STR-or-nil
-   :source-hash STR-or-nil :source-mtime STR-or-nil :created [REL]
-   :updated [REL] :remaining STR-or-nil}.
+   :source-hash STR-or-nil :source-mtime STR-or-nil :source-etag STR-or-nil
+   :source-last-modified STR-or-nil :source-final-url STR-or-nil
+   :created [REL] :updated [REL] :remaining STR-or-nil}.
   Nil when the source was never ingested into this wiki."
-  [context source-path]
+  [context source-ref]
   (let [root (fs/canonical (get-in context [:silo :path]))
         log-path (str root "/log.md")
-        source-uri (source-ref source-path)]
+        source-uri (normalize-source-ref source-ref)]
     (when (fs/exists? log-path)
       (let [entries (str/split (fs/read-text log-path) #"(?m)^## ")
             source-line (re-pattern (str "(?m)^- source: "
@@ -93,6 +93,9 @@
            :source-kind (entry-detail entry "source-kind"),
            :source-hash (entry-detail entry "source-hash"),
            :source-mtime (entry-detail entry "source-mtime"),
+           :source-etag (entry-detail entry "source-etag"),
+           :source-last-modified (entry-detail entry "source-last-modified"),
+           :source-final-url (entry-detail entry "source-final-url"),
            :created (entry-details entry "created"),
            :updated (entry-details entry "updated"),
            :remaining (entry-detail entry "remaining")})))))

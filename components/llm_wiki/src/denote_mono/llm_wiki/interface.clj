@@ -34,6 +34,10 @@
 
 (defn ingest [context source-path opts] (core/ingest context source-path opts))
 
+(defn ingest-prepared
+  [context prepared opts]
+  (core/ingest-prepared context prepared opts))
+
 (defn query [context question opts] (core/query context question opts))
 
 (defn deep-lint [context opts] (core/deep-lint context opts))
