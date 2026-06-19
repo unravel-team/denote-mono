@@ -132,12 +132,19 @@ Commands:
      :cwd cwd,
      :tty? tty?}))
 
+(defn- note-for-wire
+  "Shape a note record for JSON/EDN output: absolute path plus
+  serializable metadata, with no relative-path field."
+  [note]
+  (-> (search/note->wire note)
+      (dissoc :relative-path)))
+
 (defn- render-notes
   [notes {:keys [json edn print0]}]
-  (let [paths (map :path notes)]
-    (cond json (str/join "\n"
-                         (map #(json/write-str (search/note->wire %)) notes))
-          edn (str/join "\n" (map pr-str notes))
+  (let [wire-notes (map note-for-wire notes)
+        paths (map :path wire-notes)]
+    (cond json (str/join "\n" (map json/write-str wire-notes))
+          edn (str/join "\n" (map pr-str wire-notes))
           ;; NUL terminates EVERY record (find -print0 semantics), so
           ;; consumers like xargs -0 never see a stray trailing byte.
           print0 (apply str (map #(str % "\u0000") paths))

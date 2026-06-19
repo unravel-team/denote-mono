@@ -1,5 +1,6 @@
 (ns denote-mono.cli.core-test
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [denote-mono.cli.core :as cli]
@@ -133,9 +134,20 @@
                           {:exit 0, :out "a\u0000b\u0000"}))))
     (is (= "plain\n"
            (with-out-str (#'cli/print-result {:exit 0, :out "plain"})))))
-  (testing "--json emits parseable note records"
-    (let [{:keys [out]} (run-cli "find" "--json" "--id" "20240101T000000")
+  (testing "--json emits parseable note records with absolute paths"
+    (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+          {:keys [out]} (run-cli "find" "--json" "--id" "20240101T000000")
           parsed (json/read-str out :key-fn keyword)]
+      (is (= (str root "/20240101T000000--alpha__clojure.org") (:path parsed)))
+      (is (not (contains? parsed :relative-path)))
+      (is (= "alpha" (get-in parsed [:filename :title])))
+      (is (= "notes" (:silo parsed)))))
+  (testing "--edn emits parseable note records with absolute paths"
+    (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+          {:keys [out]} (run-cli "find" "--edn" "--id" "20240101T000000")
+          parsed (edn/read-string out)]
+      (is (= (str root "/20240101T000000--alpha__clojure.org") (:path parsed)))
+      (is (not (contains? parsed :relative-path)))
       (is (= "alpha" (get-in parsed [:filename :title])))
       (is (= "notes" (:silo parsed)))))
   (testing "unknown silo errors with configured list"
