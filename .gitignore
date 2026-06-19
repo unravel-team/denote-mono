@@ -4,3 +4,4 @@ target/
 .lsp/
 .nrepl-port
 .agents/plans/
+.pi/extensions/simplify-code.json
