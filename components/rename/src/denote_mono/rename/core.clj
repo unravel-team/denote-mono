@@ -31,12 +31,21 @@
             :else value))
     current))
 
+(defn- default-title
+  "Derive a title from source stem only for non-Denote names."
+  [{:keys [title valid-denote-name? stem]}]
+  (when (and (not title) (not valid-denote-name?)) stem))
+
 (defn- new-components
   [parsed changes path]
   (let [identifier (merge-component changes :identifier (:identifier parsed))
-        identifier (or identifier (generate-identifier path changes))]
+        identifier (or identifier (generate-identifier path changes))
+        current-title (:title parsed)
+        title (if (contains? changes :title)
+                (merge-component changes :title current-title)
+                (or (default-title parsed) current-title))]
     {:identifier identifier,
-     :title (merge-component changes :title (:title parsed)),
+     :title title,
      :keywords (merge-component changes :keywords (:keywords parsed)),
      :signature (merge-component changes :signature (:signature parsed))}))
 

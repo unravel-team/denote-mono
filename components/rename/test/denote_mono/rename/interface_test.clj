@@ -56,7 +56,23 @@
                                    {:front-matter :none})]
       (is (= "20241209T105550" (get-in plan [:new :identifier])))
       (is (str/ends-with? (:destination plan)
-                          "/20241209T105550--plain-note.org")))))
+                          "/20241209T105550--plain-note.org"))))
+  (testing "plain filenames keep their stem as the default title"
+    (let [file (str *root* "/Vedang_Manerikar_Pancard.pdf")
+          _ (spit file "pdf")
+          plan (rename/plan-rename file
+                                   {:date "2017-09-06 11:07:31"}
+                                   (context)
+                                   {:front-matter :none})]
+      (is (= "Vedang_Manerikar_Pancard" (get-in plan [:new :title])))
+      (is (str/ends-with? (:destination plan)
+                          "/20170906T110731--vedang-manerikar-pancard.pdf"))))
+  (testing "valid Denote files without titles keep no title"
+    (let [file (str *root* "/20240103T000000.org")
+          _ (spit file "content")
+          plan (rename/plan-rename file {} (context) {:front-matter :none})]
+      (is (nil? (get-in plan [:new :title])))
+      (is (str/ends-with? (:destination plan) "/20240103T000000.org")))))
 
 (deftest plan-rename-containment-test
   (testing "file outside the silo is rejected"

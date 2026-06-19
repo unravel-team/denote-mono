@@ -276,6 +276,19 @@
         (is (str/includes? out "20250505T050505--plain-note.txt"))
         (is (.exists (java.io.File.
                        (str outside "/20250505T050505--plain-note.txt")))))))
+  (testing "a plain file renamed without --title uses its original stem"
+    (let [outside (temp-dir "denote-cli-outside")
+          file (str outside "/Vedang_Manerikar_Pancard.pdf")]
+      (spit file "content")
+      (let [{:keys [exit out]} (run-cli "rename" file
+                                        "--date" "2017-09-06 11:07:31"
+                                        "--front-matter" "none")]
+        (is (zero? exit))
+        (is (str/includes? out "20170906T110731--vedang-manerikar-pancard.pdf"))
+        (is (.exists (java.io.File.
+                       (str
+                         outside
+                         "/20170906T110731--vedang-manerikar-pancard.pdf")))))))
   (testing "rename-many is no longer a command"
     (is (= 2 (:exit (run-cli "rename-many" "--add-keyword" "x" "f"))))))
 
