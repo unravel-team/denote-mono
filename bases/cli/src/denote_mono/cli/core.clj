@@ -141,14 +141,12 @@ Commands:
 
 (defn- render-notes
   [notes {:keys [json edn print0]}]
-  (let [wire-notes (map note-for-wire notes)
-        paths (map :path wire-notes)]
-    (cond json (str/join "\n" (map json/write-str wire-notes))
-          edn (str/join "\n" (map pr-str wire-notes))
-          ;; NUL terminates EVERY record (find -print0 semantics), so
-          ;; consumers like xargs -0 never see a stray trailing byte.
-          print0 (apply str (map #(str % "\u0000") paths))
-          :else (str/join "\n" paths))))
+  (cond json (str/join "\n" (map #(json/write-str (note-for-wire %)) notes))
+        edn (str/join "\n" (map #(pr-str (note-for-wire %)) notes))
+        ;; NUL terminates EVERY record (find -print0 semantics), so
+        ;; consumers like xargs -0 never see a stray trailing byte.
+        print0 (apply str (map #(str (:path %) "\u0000") notes))
+        :else (str/join "\n" (map :path notes))))
 
 (defn- interactive-tty?
   "Best-effort check that this process is attached to an interactive
