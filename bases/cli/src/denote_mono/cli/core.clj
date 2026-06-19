@@ -725,13 +725,11 @@ Commands:
        :out (str/join "\n" (concat lines ["Wiki OK"]))})))
 
 (defn- ingest-source
-  "Ingest one source and render the outcome as
+  "Ingest one prepared source and render the outcome as
   {:failed? BOOL :lines [STR]}."
-  [context options llm-opts source]
+  [context ingest-opts prepared-source]
   (let [{:keys [created updated final-text rounds stopped]}
-          (llm-wiki/ingest-prepared context
-                                    source
-                                    (assoc llm-opts :fresh? (:fresh options)))]
+          (llm-wiki/ingest-prepared context prepared-source ingest-opts)]
     (cond (= stopped :skipped)
             {:failed? false,
              :lines ["Skipped (complete and unchanged since last ingest)"]}
@@ -757,8 +755,9 @@ Commands:
   sources are prepared up front so a bad source fails the batch before
   the first LLM call. Any incomplete source fails the whole run."
   [context options llm-opts sources]
-  (let [prepared (mapv #(llm-wiki/prepare-source context % {}) sources)
-        results (mapv #(ingest-source context options llm-opts %) prepared)
+  (let [ingest-opts (assoc llm-opts :fresh? (:fresh options))
+        prepared (mapv #(llm-wiki/prepare-source context % {}) sources)
+        results (mapv #(ingest-source context ingest-opts %) prepared)
         multi? (< 1 (count prepared))
         blocks (map (fn [source {:keys [lines]}]
                       (str/join "\n"

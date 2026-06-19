@@ -66,8 +66,6 @@
   [entry key]
   (mapv second (re-seq (re-pattern (str "(?m)^- " key ": (.*)$")) entry)))
 
-(defn- normalize-source-ref [ref] (source/source-uri ref))
-
 (defn ingest-history
   "The latest log.md ingest entry for SOURCE-REF, as
   {:date STR-or-nil :status STR-or-nil :source-kind STR-or-nil
@@ -78,7 +76,7 @@
   [context source-ref]
   (let [root (fs/canonical (get-in context [:silo :path]))
         log-path (str root "/log.md")
-        source-uri (normalize-source-ref source-ref)]
+        source-uri (source/source-uri source-ref)]
     (when (fs/exists? log-path)
       (let [entries (str/split (fs/read-text log-path) #"(?m)^## ")
             source-line (re-pattern (str "(?m)^- source: "

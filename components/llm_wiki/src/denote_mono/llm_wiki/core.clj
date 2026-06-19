@@ -206,11 +206,9 @@
       (run-ingest context prepared opts history))))
 
 (defn ingest
-  "Prepare SOURCE-PATH and distill it into the wiki."
-  [context source-path opts]
-  (ingest-prepared context
-                   (source/prepare-source context source-path opts)
-                   opts))
+  "Prepare SOURCE and distill it into the wiki."
+  [context source opts]
+  (ingest-prepared context (source/prepare-source context source opts) opts))
 
 (defn- run-ingest
   [context source opts history]

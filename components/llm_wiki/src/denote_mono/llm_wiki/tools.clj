@@ -137,35 +137,32 @@
                       {:type :validation, :path path})))
     resolved))
 
-(defn source-uri?
-  "True when REF is a supported llm-wiki source URI."
+(defn- nonblank-source-ref
   [ref]
-  (let [ref (str ref)] (or (source/url? ref) (str/starts-with? ref "file:"))))
+  (let [ref (some-> ref
+                    str/trim)]
+    (when-not (str/blank? ref) ref)))
 
 (defn normalize-source-ref
   "Normalize an already persisted source ref. URLs and existing file: URIs stay
   unchanged; local paths become file: URIs without further canonicalization."
   [ref]
-  (let [ref (some-> ref
-                    str/trim)]
-    (when-not (str/blank? ref)
-      (cond (source/url? ref) ref
-            (str/starts-with? ref "file:") ref
-            :else (str "file:" (source/file-uri-path ref))))))
+  (when-let [ref (nonblank-source-ref ref)]
+    (cond (source/url? ref) ref
+          (str/starts-with? ref "file:") ref
+          :else (str "file:" (source/file-uri-path ref)))))
 
 (defn- canonical-source-ref
   "Normalize a newly supplied tool source ref to a persisted URI."
   [ref]
-  (let [ref (some-> ref
-                    str/trim)]
-    (when-not (str/blank? ref)
-      (if (source/url? ref)
-        ref
-        (let [path (source/file-uri-path ref)]
-          (when-not (.isAbsolute (java.io.File. ^String path))
-            (throw (ex-info (str "Source path must be absolute or a URI: " ref)
-                            {:type :validation, :source ref})))
-          (source/file-uri ref))))))
+  (when-let [ref (nonblank-source-ref ref)]
+    (if (source/url? ref)
+      ref
+      (let [path (source/file-uri-path ref)]
+        (when-not (.isAbsolute (java.io.File. ^String path))
+          (throw (ex-info (str "Source path must be absolute or a URI: " ref)
+                          {:type :validation, :source ref})))
+        (source/file-uri ref)))))
 
 (defn- source-label [uri] (source/display-name uri))
 
@@ -212,6 +209,10 @@
   "Source URI links from ## Sources or # Citations sections."
   [content]
   (source-link-targets (str/join "\n" (provenance-section-lines content))))
+
+(defn- provenance-source-refs
+  [content]
+  (remove nil? (map normalize-source-ref (provenance-link-targets content))))
 
 (defn sources-section
   "A \"## Sources\" markdown section linking source REFS, nil when REFS is
@@ -311,14 +312,11 @@
                    :markdown-yaml)
           [front _] (index/split-front-matter type old)
           new-body (str/trim body)
-          kept (let [kept (remove (set (map normalize-source-ref
-                                         (provenance-link-targets new-body)))
-                            (map normalize-source-ref
-                              (provenance-link-targets old)))]
-                 (remove nil? kept))
+          new-source-refs (set (provenance-source-refs new-body))
+          kept (remove new-source-refs (provenance-source-refs old))
           sources (vec (distinct (concat kept
-                                         (map canonical-source-ref
-                                           add_source_paths))))
+                                         (keep canonical-source-ref
+                                               add_source_paths))))
           content (str front "\n" new-body (sources-section sources))
           relative (relative-to root abs)]
       (fs/write-text

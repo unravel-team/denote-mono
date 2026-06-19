@@ -106,7 +106,7 @@
     {:input source-path,
      :kind :text-file,
      :path path,
-     :uri (str "file:" path),
+     :uri (file-uri path),
      :display-name (display-name path),
      :content content,
      :fingerprint {:sha256 (sha256 content), :mtime mtime}}))
@@ -230,40 +230,51 @@
                          {:type :validation, :url source-url}
                          e)))))
 
+(defn- validate-url-response!
+  [source-url {:keys [status content-type]}]
+  (when-not (<= 200 status 299)
+    (throw (ex-info (str "URL fetch failed with HTTP status " status
+                         ": " source-url)
+                    {:type :validation, :url source-url, :status status})))
+  (when-not (supported-text-content-type? content-type)
+    (throw
+      (ex-info
+        (str "URL content type is not supported: " (or content-type "unknown"))
+        {:type :validation, :url source-url, :content-type content-type}))))
+
+(defn- response->text
+  [source-url {:keys [content-type body]}]
+  (let [charset (charset-from-content-type content-type)
+        decoded (String. ^bytes body ^Charset charset)
+        content (if (html-content-type? content-type)
+                  (html->text decoded)
+                  (str/trim decoded))]
+    (when (str/blank? content)
+      (throw (ex-info (str "URL produced no extractable text: " source-url)
+                      {:type :validation, :url source-url})))
+    content))
+
+(defn- response-fingerprint
+  [content {:keys [etag last-modified final-url]}]
+  (cond-> {:sha256 (sha256 content)}
+    etag (assoc :etag etag)
+    last-modified (assoc :last-modified last-modified)
+    final-url (assoc :final-url final-url)))
+
 (defn prepare-url-source
   "Fetch and extract an HTTP/HTTPS URL into a source record."
   [context source-url opts]
-  (let [{:keys [status content-type etag last-modified final-url body]}
-          (fetch-url-or-throw source-url
-                              (merge (get-in context [:config :llm-wiki])
-                                     opts))]
-    (when-not (<= 200 status 299)
-      (throw (ex-info (str "URL fetch failed with HTTP status " status
-                           ": " source-url)
-                      {:type :validation, :url source-url, :status status})))
-    (when-not (supported-text-content-type? content-type)
-      (throw (ex-info (str "URL content type is not supported: "
-                           (or content-type "unknown"))
-                      {:type :validation,
-                       :url source-url,
-                       :content-type content-type})))
-    (let [charset (charset-from-content-type content-type)
-          decoded (String. ^bytes body ^Charset charset)
-          content (if (html-content-type? content-type)
-                    (html->text decoded)
-                    (str/trim decoded))]
-      (when (str/blank? content)
-        (throw (ex-info (str "URL produced no extractable text: " source-url)
-                        {:type :validation, :url source-url})))
+  (let [response (fetch-url-or-throw source-url
+                                     (merge (get-in context [:config :llm-wiki])
+                                            opts))]
+    (validate-url-response! source-url response)
+    (let [content (response->text source-url response)]
       {:input source-url,
        :kind :url,
        :uri source-url,
        :display-name (display-name source-url),
        :content content,
-       :fingerprint (cond-> {:sha256 (sha256 content)}
-                      etag (assoc :etag etag)
-                      last-modified (assoc :last-modified last-modified)
-                      final-url (assoc :final-url final-url))})))
+       :fingerprint (response-fingerprint content response)})))
 
 (defn prepare-source
   "Return a canonical source record for SOURCE.
