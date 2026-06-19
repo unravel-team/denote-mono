@@ -2,26 +2,20 @@
   "Agentic LLM-wiki maintenance: ingest sources, answer questions, and
   audit the wiki through the tool loop."
   (:require [clojure.string :as str]
-            [denote-mono.file-type.interface :as file-type]
             [denote-mono.filesystem.interface :as fs]
             [denote-mono.llm.interface :as llm]
             [denote-mono.llm-wiki.index :as index]
             [denote-mono.llm-wiki.scaffold :as scaffold]
+            [denote-mono.llm-wiki.source :as source]
             [denote-mono.llm-wiki.tools :as tools]
             [denote-mono.note.interface :as note]
             [denote-mono.search.interface :as search]
             [denote-mono.sequence.interface :as sequence])
-  (:import (java.time Instant LocalDate ZoneId)))
+  (:import (java.time LocalDate ZoneId)))
 
 ;;;; Plumbing
 
 (def ^:private link-id-pattern #"denote:([0-9]{8}T[0-9]{6})")
-
-(defn- basename
-  [path]
-  (if-let [i (str/last-index-of path "/")]
-    (subs path (inc i))
-    path))
 
 (defn- silo-root [context] (fs/canonical (get-in context [:silo :path])))
 
@@ -159,37 +153,29 @@
        " over creating duplicate pages."))
 
 (defn- unchanged-since-ingest?
-  "True when HISTORY proves the source at ABS is fully ingested and
-  untouched since: its recorded mtime still matches, or — for entries
-  from before mtimes were recorded — the file's mtime predates the
-  entry's day, so it cannot have changed after that ingest."
-  [{:keys [status source-mtime date]} abs]
-  (boolean (and (= "complete" status)
-                ;; Hinted: reflective calls fail inside the native image.
-                (let [mtime (.toEpochMilli ^Instant (fs/file-mtime abs))]
-                  (if source-mtime
-                    (= mtime (parse-long source-mtime))
-                    (when date
-                      (< mtime
-                         (-> (LocalDate/parse date)
-                             (.atStartOfDay (ZoneId/systemDefault))
-                             .toInstant
-                             .toEpochMilli))))))))
+  "True when HISTORY proves the source is fully ingested and unchanged.
+  Prefer source hash comparison; fall back to legacy mtime logic for old
+  entries without hash metadata."
+  [{:keys [status source-hash source-mtime date]} {:keys [fingerprint]}]
+  (let [current-mtime (:mtime fingerprint)
+        current-hash (:sha256 fingerprint)]
+    (boolean (and (= "complete" status)
+                  (or (and source-hash (= source-hash current-hash))
+                      (if source-mtime
+                        (= current-mtime (parse-long source-mtime))
+                        (when date
+                          (< current-mtime
+                             (-> (LocalDate/parse date)
+                                 (.atStartOfDay (ZoneId/systemDefault))
+                                 .toInstant
+                                 .toEpochMilli)))))))))
 
 (defn validate-source!
   "Reject a missing, directory, or non-text ingest source. Callers with
   several sources validate all of them before the first LLM call, so a
   bad path costs nothing."
   [source-path]
-  (when-not (fs/exists? source-path)
-    (throw (ex-info (str "Source does not exist: " source-path)
-                    {:type :validation, :path source-path})))
-  (when (fs/directory? source-path)
-    (throw (ex-info (str "Source is a directory: " source-path)
-                    {:type :validation, :path source-path})))
-  (when-not (file-type/text-file? source-path)
-    (throw (ex-info (str "Source is not a supported text file: " source-path)
-                    {:type :validation, :path source-path}))))
+  (source/validate-source! source-path))
 
 (def ^:private skipped-result
   {:created [],
@@ -204,38 +190,41 @@
 (defn ingest
   "Distill SOURCE-PATH into the wiki through the agentic tool loop, then
   refresh the index and the log. A source whose latest log entry is
-  complete and whose file is unchanged since is skipped outright
+  complete and unchanged since is skipped outright
   (:stopped :skipped) — no LLM call, no new log entry; :fresh? overrides.
   Returns {:created :updated :final-text :rounds :stopped :remaining}."
   [context source-path opts]
-  (validate-source! source-path)
-  (let [abs (fs/canonical source-path)
+  (let [prepared (source/prepare-source context source-path opts)
         progress (progress-fn context)
-        history (when-not (:fresh? opts) (scaffold/ingest-history context abs))]
-    (if (and history (unchanged-since-ingest? history abs))
-      (do (progress
-            (str "skipping " (basename abs) " (unchanged since last ingest)"))
+        history (when-not (:fresh? opts)
+                  (scaffold/ingest-history context (:uri prepared)))]
+    (if (and history (unchanged-since-ingest? history prepared))
+      (do (progress (str "skipping "
+                         (:display-name prepared)
+                         " (unchanged since last ingest)"))
           skipped-result)
-      (run-ingest context abs opts history))))
+      (run-ingest context prepared opts history))))
 
 (defn- run-ingest
-  [context abs opts history]
+  [context source opts history]
   (let [progress (progress-fn context)
-        mtime (.toEpochMilli ^Instant (fs/file-mtime abs))
+        fingerprint (get source :fingerprint)
+        mtime (:mtime fingerprint)
         _ (scaffold/scaffold context)
         provider (resolve-provider context opts)
-        state (atom {:created [], :updated [], :default-sources [abs]})
+        state (atom
+                {:created [], :updated [], :default-sources [(:uri source)]})
         _ (progress (str "ingesting "
-                         (basename abs)
+                         (:display-name source)
                          (when history " (continuing a previous ingest)")))
         result (llm/run-tool-loop
                  provider
                  {:system
                   (str (schema-text context) "\n\n" ingest-instructions),
                   :user (str "Source file: "
-                             abs
+                             (:uri source)
                              "\n\n"
-                             (fs/read-text abs)
+                             (:content source)
                              (when history
                                (str "\n\n" (continuation-section history)))
                              "\n\nCurrent index:\n\n"
@@ -270,8 +259,11 @@
       context
       {:date (entry-date opts),
        :op "ingest",
-       :title (basename abs),
-       :details (concat [(str "source: file:" abs) (str "status: " status)
+       :title (:display-name source),
+       :details (concat [(str "source: " (:uri source))
+                         (str "source-kind: " (name (:kind source)))
+                         (str "source-hash: " (:sha256 fingerprint))
+                         (str "status: " status)
                          ;; Captured before the run: a file edited while
                          ;; ingesting will mismatch and reprocess next
                          ;; time.

@@ -757,7 +757,7 @@ Commands:
   sources are validated up front so a bad path fails the batch before
   the first LLM call. Any incomplete source fails the whole run."
   [context options llm-opts sources]
-  (run! llm-wiki/validate-source! sources)
+  (run! #(llm-wiki/prepare-source context % {}) sources)
   (let [results (mapv #(ingest-source context options llm-opts %) sources)
         multi? (< 1 (count sources))
         blocks (map (fn [source {:keys [lines]}]

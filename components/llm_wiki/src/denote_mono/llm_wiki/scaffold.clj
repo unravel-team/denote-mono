@@ -64,19 +64,30 @@
   [entry key]
   (mapv second (re-seq (re-pattern (str "(?m)^- " key ": (.*)$")) entry)))
 
+(defn- normalize-source-path
+  [source-path]
+  (cond (str/starts-with? source-path "file://") (subs source-path 7)
+        (str/starts-with? source-path "file:") (subs source-path 5)
+        :else source-path))
+
+(defn- source-ref
+  [source-path]
+  (str "file:" (fs/canonical (normalize-source-path source-path))))
+
 (defn ingest-history
   "The latest log.md ingest entry for SOURCE-PATH, as
-  {:date STR-or-nil :status STR-or-nil :source-mtime STR-or-nil
-   :created [REL] :updated [REL] :remaining STR-or-nil}.
+  {:date STR-or-nil :status STR-or-nil :source-kind STR-or-nil
+   :source-hash STR-or-nil :source-mtime STR-or-nil :created [REL]
+   :updated [REL] :remaining STR-or-nil}.
   Nil when the source was never ingested into this wiki."
   [context source-path]
   (let [root (fs/canonical (get-in context [:silo :path]))
         log-path (str root "/log.md")
-        source-abs (fs/canonical source-path)]
+        source-uri (source-ref source-path)]
     (when (fs/exists? log-path)
       (let [entries (str/split (fs/read-text log-path) #"(?m)^## ")
-            source-line (re-pattern (str "(?m)^- source: file:"
-                                         (Pattern/quote source-abs)
+            source-line (re-pattern (str "(?m)^- source: "
+                                         (Pattern/quote source-uri)
                                          "$"))
             ingest-of-source? (fn [entry]
                                 (and (str/includes? entry "] ingest | ")
@@ -84,6 +95,8 @@
         (when-let [entry (last (filter ingest-of-source? entries))]
           {:date (second (re-find #"^\[(\d{4}-\d{2}-\d{2})\]" entry)),
            :status (entry-detail entry "status"),
+           :source-kind (entry-detail entry "source-kind"),
+           :source-hash (entry-detail entry "source-hash"),
            :source-mtime (entry-detail entry "source-mtime"),
            :created (entry-details entry "created"),
            :updated (entry-details entry "updated"),

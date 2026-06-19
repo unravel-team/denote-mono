@@ -478,7 +478,9 @@
                          "- status: complete
 ")))
     (testing "an exhausted ingest logs incomplete status and a handoff note"
-      (bump-mtime! source) ;; else the complete first ingest would skip it
+      ;; Change content, not only mtime: source-hash skip treats same text
+      ;; as already ingested even when filesystem metadata changes.
+      (spit source "Raw text about alpha, beta, and gamma.")
       (let [requests (atom [])
             result
               (ingest!
@@ -567,15 +569,17 @@
                     (llm-wiki/ingest (merge context extra)
                                      source
                                      (merge {:date "2026-06-12"} opts))))]
-    (testing "a complete ingest records the source mtime in the log"
+    (testing "a complete ingest records the source hash and mtime in the log"
       (ingest! (scripted [(step "make a" "create_note" {:title "A", :body "A."})
                           (step "done" "finish" {})
                           (cot "final_text" "r" "Done.")])
                {}
                {})
-      (is (re-find #"- source-mtime: \d+
-"
-                   (fs/read-text (wiki-path context "log.md")))))
+      (let [log (fs/read-text (wiki-path context "log.md"))]
+        (is (re-find #"- source-hash: [0-9a-f]{64}
+" log))
+        (is (re-find #"- source-mtime: \d+
+" log))))
     (testing "an unchanged complete source is skipped without an LLM call"
       (let [messages (atom [])
             result
@@ -594,7 +598,11 @@
                                            (cot "final_text" "r" "Fresh.")])
                                 {}
                                 {:fresh? true})))))
-    (testing "a source modified since the ingest is reprocessed"
+    (testing "touching a source without changing content skips by hash"
+      (bump-mtime! source)
+      (is (= :skipped (:stopped (ingest! (no-llm) {} {})))))
+    (testing "a source with changed text is reprocessed"
+      (spit source "Raw text changed.")
       (bump-mtime! source)
       (is (= :done
              (:stopped (ingest! (scripted [(step "f" "finish" {})

@@ -135,6 +135,20 @@
                       {:type :validation, :path path})))
     resolved))
 
+(defn- strip-file-uri
+  [path]
+  (cond (str/starts-with? path "file://") (subs path 7)
+        (str/starts-with? path "file:") (subs path 5)
+        :else path))
+
+(defn- normalized-source-path [path] (when (seq path) (strip-file-uri path)))
+
+(defn- canonical-source-path
+  [path]
+  (when (seq path) (fs/canonical (normalized-source-path path))))
+
+(defn- source-link-path [path] (normalized-source-path path))
+
 ;; Built with re-pattern so the source never contains a literal org-style
 ;; file link opener, which tagref would try to validate as a reference.
 (def ^:private org-file-link-pattern
@@ -150,10 +164,11 @@
   "A \"## Sources\" markdown section linking PATHS, nil when PATHS is
   empty."
   [paths]
-  (when (seq paths)
-    (apply str
-      "\n\n## Sources\n\n"
-      (map (fn [p] (str "- [" (basename p) "](file:" p ")\n")) paths))))
+  (let [targets (remove nil? (map normalized-source-path paths))]
+    (when (seq targets)
+      (apply str
+        "\n\n## Sources\n\n"
+        (map (fn [p] (str "- [" (basename p) "](file:" p ")\n")) targets)))))
 
 (defn silo-sequences
   "All valid sequences among the silo's notes."
@@ -214,8 +229,8 @@
         signature (if parent_sequence
                     (sequence/next-child sequences parent_sequence scheme)
                     (sequence/next-parent sequences scheme))
-        sources (mapv fs/canonical
-                  (or (not-empty source_paths) (:default-sources @state)))
+        raw-sources (or (not-empty source_paths) (:default-sources @state))
+        sources (mapv canonical-source-path raw-sources)
         plan (note/plan-new {:title title,
                              :keywords (normalize-keywords keywords),
                              :signature signature,
@@ -243,9 +258,12 @@
                    :markdown-yaml)
           [front _] (index/split-front-matter type old)
           new-body (str/trim body)
-          kept (remove (set (file-link-targets new-body))
-                 (file-link-targets old))
-          sources (vec (distinct (concat kept add_source_paths)))
+          kept (let [kept (remove (set (map source-link-path
+                                         (file-link-targets new-body)))
+                            (map source-link-path (file-link-targets old)))]
+                 (remove nil? kept))
+          sources (vec (distinct
+                         (concat kept (map source-link-path add_source_paths))))
           content (str front "\n" new-body (sources-section sources))
           relative (relative-to root abs)]
       (fs/write-text

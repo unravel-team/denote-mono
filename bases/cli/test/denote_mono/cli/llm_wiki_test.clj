@@ -35,6 +35,7 @@
                    :silos {:notes {:path notes},
                            :wiki {:path wiki, :llm-wiki true}}}))
     (binding [*harness* {:env {"EDITOR" "true",
+                               "HOME" config-dir,
                                "OPENROUTER_API_KEY" "test-key"},
                          :cwd "/elsewhere"}
               *config-path* config-path
@@ -85,12 +86,6 @@
 
 (defn- no-llm [] (fn [& _] (throw (ex-info "LLM must not be called" {}))))
 
-(defn- bump-mtime!
-  "Advance PATH's mtime so it no longer matches a recorded ingest."
-  [path]
-  (let [file (java.io.File. ^String path)]
-    (.setLastModified file (+ (.lastModified file) 1000))))
-
 (deftest ingest-command
   (testing "ingest runs the loop and reports created notes"
     (let [{:keys [exit out]}
@@ -131,7 +126,7 @@
       (is (= 2 exit))
       (is (str/includes? out "Usage"))))
   (testing "exhausting --max-rounds maps to the tool exit code"
-    (bump-mtime! *raw-source*) ;; else the completed ingest above skips
+    (spit *raw-source* "Raw source text for max-rounds failure.")
     (let [{:keys [exit out]}
             (with-redefs [router/completion
                             (scripted
@@ -148,6 +143,7 @@
       (testing "the failure tells you progress is saved and how to resume"
         (is (str/includes? out "re-run")))))
   (testing "an empty model reply is a tool failure, not silent success"
+    (spit *raw-source* "Raw source text for empty-reply failure.")
     (let [{:keys [exit out]}
             (with-redefs [router/completion (scripted
                                               [(step "nothing" "finish" {})
@@ -162,6 +158,22 @@
                                                (cot "final_text" "r" "Done.")])]
               (run-cli *harness* "llm-wiki" "ingest" *raw-source* "--fresh"))]
       (is (zero? exit)))))
+
+(deftest ingest-expands-home-source
+  (testing "quoted ~/ paths pass CLI prevalidation and ingest normally"
+    (let [{:keys [exit out]}
+            (with-redefs [router/completion
+                            (scripted
+                              [(step "make alpha"
+                                     "create_note"
+                                     {:title "Alpha",
+                                      :keywords ["ml"],
+                                      :body "Alpha distilled."})
+                               (step "done" "finish" {})
+                               (cot "final_text" "r" "Filed home source.")])]
+              (run-cli *harness* "llm-wiki" "ingest" "~/raw-source.txt"))]
+      (is (zero? exit))
+      (is (str/includes? out "Filed home source.")))))
 
 (deftest ingest-multiple-sources
   (let [source2 (str (temp-dir "denote-llm-wiki-src2") "/second.txt")]
@@ -194,8 +206,8 @@
                                       "/nope/missing.txt"))]
         (is (= 3 exit))))
     (testing "an exhausted source fails the batch; later sources still run"
-      (bump-mtime! *raw-source*) ;; else the completed ingests above skip
-      (bump-mtime! source2)
+      (spit *raw-source* "Raw source text for batch exhaustion.")
+      (spit source2 "Second source text after batch exhaustion.")
       (let [{:keys [exit out]}
               (with-redefs [router/completion
                               (scripted
@@ -231,7 +243,7 @@
                      *raw-source*)))
         (is (str/includes? (str err) "creating note: Alpha"))))
     (testing "a tty on stderr alone narrates too (stdin piped, e.g. xargs)"
-      (bump-mtime! *raw-source*) ;; else the completed ingest above skips
+      (spit *raw-source* "Raw source text for stderr progress.")
       (let [err (java.io.StringWriter.)]
         (binding [*err* err]
           (with-redefs [router/completion (scripted responses)]
@@ -241,7 +253,7 @@
                      *raw-source*)))
         (is (str/includes? (str err) "creating note: Alpha"))))
     (testing "piped output stays silent"
-      (bump-mtime! *raw-source*)
+      (spit *raw-source* "Raw source text for piped progress.")
       (let [err (java.io.StringWriter.)]
         (binding [*err* err]
           (with-redefs [router/completion (scripted responses)]

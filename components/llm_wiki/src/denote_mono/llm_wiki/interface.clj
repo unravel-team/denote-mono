@@ -5,6 +5,7 @@
             [denote-mono.llm-wiki.index :as index]
             [denote-mono.llm-wiki.lint :as lint]
             [denote-mono.llm-wiki.scaffold :as scaffold]
+            [denote-mono.llm-wiki.source :as source]
             [denote-mono.llm-wiki.tools :as tools]))
 
 (defn scaffold [context] (scaffold/scaffold context))
@@ -12,6 +13,12 @@
 (defn regenerate-index [context] (index/regenerate-index context))
 
 (defn append-log [context entry] (scaffold/append-log context entry))
+
+(defn sha256 [text] (source/sha256 text))
+
+(defn prepare-source
+  [context source-path opts]
+  (source/prepare-source context source-path opts))
 
 (defn ingest-history
   [context source-path]
