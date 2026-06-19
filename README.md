@@ -51,9 +51,9 @@ make build
 alias denote='java -jar /path/to/denote-mono/projects/denote-cli/target/denote-cli-vX.Y.Z-standalone.jar'
 ```
 
-### Optional runtime tools
+### Runtime tools
 
-The CLI degrades gracefully without these, but they make it better:
+Some features use external tools when available; PDF ingest requires one:
 
 - `fzf` — **strongly recommended** (`brew install fzf`). Makes `find` and
   `grep` interactive on a terminal: fzf narrows the results, **Enter
@@ -226,13 +226,12 @@ model).
 ```sh
 export ANTHROPIC_API_KEY=...      # or configure :llm in config.edn
 
-# index text files, HTTP/HTTPS URLs, and PDFs; sources themselves are never touched
-# PDF ingest requires pdftotext (Poppler)
+# index text files, HTTP/HTTPS URLs, and text-extractable PDFs;
+# PDF ingest requires pdftotext (Poppler), and scanned PDFs need OCR first
 denote llm-wiki ingest ~/notes/lecture-transcript.txt
 denote llm-wiki ingest http://sunnyday.mit.edu/16.355/parnas-criteria.html
 denote llm-wiki ingest ~/notes/paper.pdf
 denote llm-wiki ingest chapter-1.md chapter-2.md chapter-3.md
-# scanned PDFs need OCR first; OCR is not supported yet
 
 # pipe a note query into a batch ingest
 denote find --print0 | xargs -0 denote llm-wiki ingest

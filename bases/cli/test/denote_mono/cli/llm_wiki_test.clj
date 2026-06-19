@@ -88,27 +88,37 @@
 
 (defn- no-llm [] (fn [& _] (throw (ex-info "LLM must not be called" {}))))
 
+(defn- fake-source-record
+  [{:keys [input kind uri display-name content path fingerprint]}]
+  (cond-> {:input input,
+           :kind kind,
+           :uri uri,
+           :display-name display-name,
+           :content content,
+           :fingerprint (merge {:sha256 (source/sha256 content)} fingerprint)}
+    path (assoc :path path)))
+
 (defn- fake-url-source
   [url]
   (let [content "Fetched CLI URL text."]
-    {:input url,
-     :kind :url,
-     :uri url,
-     :display-name "article",
-     :content content,
-     :fingerprint {:sha256 (source/sha256 content), :final-url url}}))
+    (fake-source-record {:input url,
+                         :kind :url,
+                         :uri url,
+                         :display-name "article",
+                         :content content,
+                         :fingerprint {:final-url url}})))
 
 (defn- fake-pdf-source
   [path]
   (let [content "Fetched CLI PDF text."
         abs (fs/canonical path)]
-    {:input path,
-     :kind :pdf-file,
-     :path abs,
-     :uri (str "file:" abs),
-     :display-name "paper.pdf",
-     :content content,
-     :fingerprint {:sha256 (source/sha256 content), :mtime 1710000000000}}))
+    (fake-source-record {:input path,
+                         :kind :pdf-file,
+                         :path abs,
+                         :uri (str "file:" abs),
+                         :display-name "paper.pdf",
+                         :content content,
+                         :fingerprint {:mtime 1710000000000}})))
 
 (deftest ingest-command
   (testing "ingest runs the loop and reports created notes"

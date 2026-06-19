@@ -85,6 +85,11 @@
   [source-path]
   (str/ends-with? (str/lower-case (str source-path)) ".pdf"))
 
+(defn- local-source-kind
+  [source-path]
+  (cond (pdf-source? source-path) :pdf-file
+        (file-type/text-file? source-path) :text-file))
+
 (defn- validate-source-file!
   [source-path]
   (when-not (fs/exists? source-path)
@@ -100,7 +105,7 @@
 (defn validate-source!
   [source-path]
   (validate-source-file! source-path)
-  (when-not (or (pdf-source? source-path) (file-type/text-file? source-path))
+  (when-not (local-source-kind source-path)
     (throw (ex-info (str "Source is not a supported text or PDF file: "
                          source-path)
                     {:type :validation, :path source-path}))))
@@ -135,21 +140,16 @@
     out))
 
 (defn- build-file-source
-  [source-ref source-path kind content]
+  [source-ref canonical-path kind content]
   {:input source-ref,
    :kind kind,
-   :path source-path,
-   :uri (file-uri source-path),
-   :display-name (display-name source-path),
+   :path canonical-path,
+   :uri (file-uri canonical-path),
+   :display-name (display-name canonical-path),
    :content content,
    :fingerprint {:sha256 (sha256 content),
                  :mtime (.toEpochMilli ^java.time.Instant
-                                       (fs/file-mtime source-path))}})
-
-(defn- prepare-pdf-source
-  [context source-ref source-path]
-  (let [content (run-pdftotext context source-path)]
-    (build-file-source source-ref source-path :pdf-file content)))
+                                       (fs/file-mtime canonical-path))}})
 
 (defn prepare-file-source
   "Return a canonical source record for a local file."
@@ -157,13 +157,15 @@
   (let [expanded (normalize-source-path context source-path)
         path (fs/canonical expanded)]
     (validate-source-file! path)
-    (if (pdf-source? path)
-      (prepare-pdf-source context source-path path)
-      (do (when-not (file-type/text-file? path)
-            (throw (ex-info (str "Source is not a supported text file: " path)
-                            {:type :validation, :path path})))
-          (let [content (fs/read-text path)]
-            (build-file-source source-path path :text-file content))))))
+    (case (local-source-kind path)
+      :pdf-file (build-file-source source-path
+                                   path
+                                   :pdf-file
+                                   (run-pdftotext context path))
+      :text-file
+        (build-file-source source-path path :text-file (fs/read-text path))
+      (throw (ex-info (str "Source is not a supported text file: " path)
+                      {:type :validation, :path path})))))
 
 (defn- first-header
   [^HttpHeaders headers name]

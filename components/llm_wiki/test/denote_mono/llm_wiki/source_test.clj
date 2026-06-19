@@ -22,13 +22,19 @@
    {:env {"HOME" home},
     :config (merge-with merge (config/default-config) config-overrides)}))
 
+(defn- sh-quote [s] (str "'" (str/replace s "'" "'\"'\"'") "'"))
+
 (defn- fake-pdftotext!
   [dir text]
   (let [path (str dir "/fake-pdftotext")
         file (File. path)]
-    (spit path (str "#!/bin/sh\nprintf '%s' '" text "'\n"))
+    (spit path (str "#!/bin/sh\nprintf '%s' " (sh-quote text) "\n"))
     (.setExecutable file true)
     path))
+
+(defn- pdf-context
+  [home extracted]
+  (make-context home {:tools {:pdftotext [(fake-pdftotext! home extracted)]}}))
 
 (defn- ex-from [f] (try (f) nil (catch Exception e e)))
 
@@ -82,13 +88,10 @@
 (deftest prepare-pdf-source-test
   (let [dir (temp-dir)
         pdf (str dir "/paper.pdf")
-        extracted "PDF extracted text about alpha.\n"
-        tool (fake-pdftotext! dir extracted)]
-    (spit pdf "%PDF-1.4 fake bytes")
-    (let [prepared (source/prepare-source
-                     (make-context dir {:tools {:pdftotext [tool]}})
-                     pdf
-                     {})
+        raw-pdf "%PDF-1.4 fake bytes"
+        extracted "PDF extracted text about alpha.\n"]
+    (spit pdf raw-pdf)
+    (let [prepared (source/prepare-source (pdf-context dir extracted) pdf {})
           abs (fs/canonical pdf)]
       (is (= pdf (:input prepared)))
       (is (= :pdf-file (:kind prepared)))
@@ -99,7 +102,7 @@
       (testing "PDF source-hash is over extracted text, not raw PDF bytes"
         (is (= (source/sha256 extracted)
                (get-in prepared [:fingerprint :sha256])))
-        (is (not= (source/sha256 "%PDF-1.4 fake bytes")
+        (is (not= (source/sha256 raw-pdf)
                   (get-in prepared [:fingerprint :sha256]))))
       (is (integer? (get-in prepared [:fingerprint :mtime]))))))
 
@@ -107,13 +110,12 @@
   (let [home (temp-dir)
         dir (str home "/Documents")
         _ (.mkdirs (File. dir))
-        pdf (str dir "/quoted.pdf")
-        tool (fake-pdftotext! home "Quoted PDF text.\n")]
+        pdf (str dir "/quoted.pdf")]
     (spit pdf "%PDF")
-    (let [prepared (source/prepare-source
-                     (make-context home {:tools {:pdftotext [tool]}})
-                     "~/Documents/quoted.pdf"
-                     {})]
+    (let [prepared (source/prepare-source (pdf-context home
+                                                       "Quoted PDF text.\n")
+                                          "~/Documents/quoted.pdf"
+                                          {})]
       (is (= "~/Documents/quoted.pdf" (:input prepared)))
       (is (= :pdf-file (:kind prepared)))
       (is (= (str "file:" (fs/canonical pdf)) (:uri prepared))))))
@@ -133,13 +135,10 @@
 
 (deftest prepare-pdf-blank-text-test
   (let [dir (temp-dir)
-        pdf (str dir "/scanned.pdf")
-        tool (fake-pdftotext! dir "   \n\t")]
+        pdf (str dir "/scanned.pdf")]
     (spit pdf "%PDF")
-    (let [ex (ex-from #(source/prepare-source
-                         (make-context dir {:tools {:pdftotext [tool]}})
-                         pdf
-                         {}))]
+    (let [ex (ex-from
+               #(source/prepare-source (pdf-context dir "   \n\t") pdf {}))]
       (is (= :validation (:type (ex-data ex))))
       (is (str/includes? (ex-message ex) "PDF has no extractable text")))))
 
