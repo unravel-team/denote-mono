@@ -41,8 +41,7 @@ Global options:
 
 Commands:
   find [QUERY]     Find notes (filters: --match --keyword --signature
-                   --title --id; output: --sort --json --edn --print0
-                   --absolute).
+                   --title --id; output: --sort --json --edn --print0).
                    On a terminal fzf selects interactively: Enter opens
                    the selection in $EDITOR, Ctrl-P prints it instead
   grep QUERY       Search note contents (rg-accelerated when available).
@@ -93,8 +92,7 @@ Commands:
    [nil "--id ID" "Filter by identifier"]
    [nil "--sort KEY" "Sort key" :default "identifier"]
    [nil "--json" "JSON-lines output"] [nil "--edn" "EDN output"]
-   [nil "--print0" "NUL-delimited output"]
-   [nil "--absolute" "Print absolute paths"]])
+   [nil "--print0" "NUL-delimited output"]])
 
 (def ^:private rename-options
   [[nil "--title TITLE" "New title; empty string removes"]
@@ -135,15 +133,15 @@ Commands:
      :tty? tty?}))
 
 (defn- render-notes
-  [notes {:keys [json edn print0 absolute]}]
-  (let [path-key (if absolute :path :relative-path)]
+  [notes {:keys [json edn print0]}]
+  (let [paths (map :path notes)]
     (cond json (str/join "\n"
                          (map #(json/write-str (search/note->wire %)) notes))
           edn (str/join "\n" (map pr-str notes))
           ;; NUL terminates EVERY record (find -print0 semantics), so
           ;; consumers like xargs -0 never see a stray trailing byte.
-          print0 (apply str (map #(str (path-key %) "\u0000") notes))
-          :else (str/join "\n" (map path-key notes)))))
+          print0 (apply str (map #(str % "\u0000") paths))
+          :else (str/join "\n" paths))))
 
 (defn- interactive-tty?
   "Best-effort check that this process is attached to an interactive

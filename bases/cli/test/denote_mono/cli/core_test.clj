@@ -10,6 +10,7 @@
 (def ^:dynamic *harness* nil)
 (def ^:dynamic *config-path* nil)
 (def ^:dynamic *notes-root* nil)
+(def ^:dynamic *work-root* nil)
 
 (defn- temp-dir
   [prefix]
@@ -28,7 +29,8 @@
                    :silos {:notes {:path notes}, :work {:path work}}}))
     (binding [*harness* {:env {"EDITOR" "true"}, :cwd "/elsewhere"}
               *config-path* config-path
-              *notes-root* notes]
+              *notes-root* notes
+              *work-root* work]
       (f))))
 
 (use-fixtures :each cli-fixture)
@@ -57,6 +59,7 @@
       (is (str/includes? out "Usage: denote new"))))
   (testing "the command's own options are listed"
     (is (str/includes? (:out (run-cli "find" "--help")) "--match"))
+    (is (not (str/includes? (:out (run-cli "find" "--help")) "--absolute")))
     (is (str/includes? (:out (run-cli "rename" "--help")) "--break-links"))
     (is (str/includes? (:out (run-cli "llm-wiki" "--help")) "--deep")))
   (testing "subcommand groups list their subcommands"
@@ -88,35 +91,36 @@
         (is (re-matches #"denote (dev|v\d+\.\d+\.\d+)" out))))))
 
 (deftest find-command
-  (testing "find with query prints matching paths"
-    (let [{:keys [exit out]} (run-cli "find" "alpha")]
-      (is (zero? exit))
-      (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
-  (testing "find without matches exits 6"
-    (is (= 6 (:exit (run-cli "find" "zzz")))))
-  (testing "find without query lists the silo, sorted by identifier"
-    (let [{:keys [exit out]} (run-cli "find")]
-      (is (zero? exit))
-      (is (= ["20240101T000000--alpha__clojure.org"
-              "20240102T000000--beta__notes.org"]
-             (str/split-lines out)))))
-  (testing "--silo selects another silo"
-    (let [{:keys [out]} (run-cli "--silo" "work" "find")]
-      (is (= ["20240301T000000--work-note__job.org"] (str/split-lines out)))))
-  (testing "keyword filter"
-    (let [{:keys [out]} (run-cli "find" "--keyword" "clojure")]
-      (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
-  (testing "--absolute prints absolute paths"
-    ;; Canonical root because --absolute prints canonicalized paths,
-    ;; which differ under macOS's /var -> /private/var symlink.
+  (testing "find with query prints absolute matching paths"
     (let [root (.getCanonicalPath (java.io.File. *notes-root*))
-          {:keys [exit out]} (run-cli "find" "alpha" "--absolute")]
+          {:keys [exit out]} (run-cli "find" "alpha")]
       (is (zero? exit))
       (is (= [(str root "/20240101T000000--alpha__clojure.org")]
              (str/split-lines out)))))
-  (testing "--print0 emits NUL-terminated paths, combinable with --absolute"
+  (testing "find without matches exits 6"
+    (is (= 6 (:exit (run-cli "find" "zzz")))))
+  (testing "find without query lists absolute paths, sorted by identifier"
     (let [root (.getCanonicalPath (java.io.File. *notes-root*))
-          {:keys [out]} (run-cli "find" "--print0" "--absolute")]
+          {:keys [exit out]} (run-cli "find")]
+      (is (zero? exit))
+      (is (= [(str root "/20240101T000000--alpha__clojure.org")
+              (str root "/20240102T000000--beta__notes.org")]
+             (str/split-lines out)))))
+  (testing "--silo selects another silo"
+    (let [root (.getCanonicalPath (java.io.File. *work-root*))
+          {:keys [out]} (run-cli "--silo" "work" "find")]
+      (is (= [(str root "/20240301T000000--work-note__job.org")]
+             (str/split-lines out)))))
+  (testing "keyword filter"
+    (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+          {:keys [out]} (run-cli "find" "--keyword" "clojure")]
+      (is (= [(str root "/20240101T000000--alpha__clojure.org")]
+             (str/split-lines out)))))
+  (testing "--absolute is no longer accepted"
+    (is (= 2 (:exit (run-cli "find" "alpha" "--absolute")))))
+  (testing "--print0 emits NUL-terminated absolute paths"
+    (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+          {:keys [out]} (run-cli "find" "--print0")]
       (is (= [(str root "/20240101T000000--alpha__clojure.org")
               (str root "/20240102T000000--beta__notes.org")]
              (str/split out #"\u0000")))
@@ -167,13 +171,15 @@
       (let [{:keys [exit out]} (run-tty "find")]
         (is (zero? exit))
         (is (str/blank? out))))
-    (testing "Ctrl-P prints the selection instead"
+    (testing "Ctrl-P prints the absolute selection instead"
       (spit fzf-config
             (pr-str (assoc base
                       :tools {:fzf [(fake-fzf! tools-dir "ctrl-p")]})))
-      (let [{:keys [exit out]} (run-tty "find")]
+      (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+            {:keys [exit out]} (run-tty "find")]
         (is (zero? exit))
-        (is (= ["20240101T000000--alpha__clojure.org"] (str/split-lines out)))))
+        (is (= [(str root "/20240101T000000--alpha__clojure.org")]
+               (str/split-lines out)))))
     (testing "a non-fzf selector defaults to opening the selection"
       (spit fzf-config (pr-str (assoc base :tools {:fzf ["head" "-1"]})))
       (let [{:keys [exit out]} (run-tty "find")]
