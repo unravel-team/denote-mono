@@ -143,9 +143,7 @@
                     str/trim)]
     (when-not (str/blank? ref) ref)))
 
-(defn- absolute-file-ref?
-  [ref]
-  (.isAbsolute (java.io.File. ^String (source/file-uri-path ref))))
+(defn- absolute-path? [path] (.isAbsolute (java.io.File. ^String path)))
 
 (defn normalize-source-ref
   "Normalize an already persisted source ref. URLs stay unchanged. Absolute
@@ -154,9 +152,11 @@
   before writing llm-wiki provenance."
   [ref]
   (when-let [ref (nonblank-source-ref ref)]
-    (cond (source/url? ref) ref
-          (str/starts-with? ref "file:") (when (absolute-file-ref? ref) ref)
-          (absolute-file-ref? ref) (str "file:" (source/file-uri-path ref)))))
+    (if (source/url? ref)
+      ref
+      (let [path (source/file-uri-path ref)]
+        (when (absolute-path? path)
+          (if (str/starts-with? ref "file:") ref (str "file:" path)))))))
 
 (defn- canonical-source-ref
   "Normalize a newly supplied tool source ref to a persisted URI."

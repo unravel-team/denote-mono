@@ -351,6 +351,7 @@
 
 (deftest execute-tool-update-note-drops-relative-source-refs-test
   (let [context (make-context)
+        relative-source "file:sources/foo.pdf"
         absolute-source (str (temp-dir) "/absolute.pdf")
         _ (spit absolute-source "%PDF")
         note (write-note! context
@@ -359,7 +360,9 @@
                            :title "Alpha",
                            :keywords ["ml"],
                            :body (str "Old body.\n\n## Sources\n\n"
-                                      "- [relative](file:sources/foo.pdf)\n"
+                                      "- [relative]("
+                                      relative-source
+                                      ")\n"
                                       "- [absolute](file:"
                                       absolute-source
                                       ")\n")})
@@ -369,8 +372,10 @@
     (execute "update_note" {:path relative, :body "New body."})
     (let [content (fs/read-text note)
           sources (subs content (str/index-of content "## Sources"))]
-      (is (not (str/includes? sources "file:sources/foo.pdf")))
-      (is (str/includes? sources (str "(file:" absolute-source ")"))))))
+      (testing "drops relative source refs"
+        (is (not (str/includes? sources relative-source))))
+      (testing "keeps absolute source refs"
+        (is (str/includes? sources (str "(file:" absolute-source ")")))))))
 
 (deftest execute-tool-read-and-list-test
   (let [context (make-context)
