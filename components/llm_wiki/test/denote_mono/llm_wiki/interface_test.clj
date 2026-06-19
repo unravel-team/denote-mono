@@ -576,10 +576,8 @@
                {}
                {})
       (let [log (fs/read-text (wiki-path context "log.md"))]
-        (is (re-find #"- source-hash: [0-9a-f]{64}
-" log))
-        (is (re-find #"- source-mtime: \d+
-" log))))
+        (is (re-find #"- source-hash: [0-9a-f]{64}\n" log))
+        (is (re-find #"- source-mtime: \d+\n" log))))
     (testing "an unchanged complete source is skipped without an LLM call"
       (let [messages (atom [])
             result

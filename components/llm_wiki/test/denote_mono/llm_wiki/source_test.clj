@@ -1,6 +1,5 @@
 (ns denote-mono.llm-wiki.source-test
   (:require [clojure.test :refer [deftest is testing]]
-            [denote-mono.config.interface :as config]
             [denote-mono.filesystem.interface :as fs]
             [denote-mono.llm-wiki.source :as source])
   (:import (java.nio.file Files)
@@ -11,9 +10,7 @@
   (str (Files/createTempDirectory "denote-llm-wiki-source-test"
                                   (make-array FileAttribute 0))))
 
-(defn- make-context
-  [home]
-  {:config (config/default-config), :env {"HOME" home}})
+(defn- make-context [home] {:env {"HOME" home}})
 
 (deftest prepare-text-file-source-test
   (let [dir (temp-dir)

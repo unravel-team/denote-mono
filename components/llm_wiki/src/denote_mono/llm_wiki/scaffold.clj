@@ -3,7 +3,8 @@
   index.md, log.md, and wiki-schema.md."
   (:require [clojure.string :as str]
             [denote-mono.filesystem.interface :as fs]
-            [denote-mono.llm-wiki.index :as index])
+            [denote-mono.llm-wiki.index :as index]
+            [denote-mono.llm-wiki.source :as source])
   (:import (java.util.regex Pattern)))
 
 (def file-names ["index.md" "log.md" "wiki-schema.md"])
@@ -64,15 +65,9 @@
   [entry key]
   (mapv second (re-seq (re-pattern (str "(?m)^- " key ": (.*)$")) entry)))
 
-(defn- normalize-source-path
-  [source-path]
-  (cond (str/starts-with? source-path "file://") (subs source-path 7)
-        (str/starts-with? source-path "file:") (subs source-path 5)
-        :else source-path))
-
 (defn- source-ref
   [source-path]
-  (str "file:" (fs/canonical (normalize-source-path source-path))))
+  (str "file:" (fs/canonical (source/file-uri-path source-path))))
 
 (defn ingest-history
   "The latest log.md ingest entry for SOURCE-PATH, as

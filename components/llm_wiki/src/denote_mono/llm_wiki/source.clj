@@ -14,7 +14,8 @@
                          (.update (.getBytes ^String text "UTF-8"))))]
     (apply str (map #(format "%02x" (bit-and % 0xff)) bytes))))
 
-(defn- strip-file-uri
+(defn file-uri-path
+  "Return the local path portion of a file: URI, or PATH unchanged."
   [path]
   (cond (str/starts-with? path "file://") (subs path 7)
         (str/starts-with? path "file:") (subs path 5)
@@ -32,7 +33,7 @@
   "Expand a leading `~/` using CONTEXT env, and strip `file:` prefixes."
   [context source-path]
   (-> source-path
-      strip-file-uri
+      file-uri-path
       (config/expand-home (or (:env context) {}))))
 
 (defn validate-source!

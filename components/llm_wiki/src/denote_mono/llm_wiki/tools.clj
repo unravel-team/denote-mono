@@ -6,6 +6,7 @@
             [denote-mono.filesystem.interface :as fs]
             [denote-mono.llm-wiki.index :as index]
             [denote-mono.llm-wiki.scaffold :as scaffold]
+            [denote-mono.llm-wiki.source :as source]
             [denote-mono.note.interface :as note]
             [denote-mono.search.interface :as search]
             [denote-mono.sequence.interface :as sequence]))
@@ -135,19 +136,13 @@
                       {:type :validation, :path path})))
     resolved))
 
-(defn- strip-file-uri
+(defn- normalized-source-path
   [path]
-  (cond (str/starts-with? path "file://") (subs path 7)
-        (str/starts-with? path "file:") (subs path 5)
-        :else path))
-
-(defn- normalized-source-path [path] (when (seq path) (strip-file-uri path)))
+  (when (seq path) (source/file-uri-path path)))
 
 (defn- canonical-source-path
   [path]
   (when (seq path) (fs/canonical (normalized-source-path path))))
-
-(defn- source-link-path [path] (normalized-source-path path))
 
 ;; Built with re-pattern so the source never contains a literal org-style
 ;; file link opener, which tagref would try to validate as a reference.
@@ -258,12 +253,14 @@
                    :markdown-yaml)
           [front _] (index/split-front-matter type old)
           new-body (str/trim body)
-          kept (let [kept (remove (set (map source-link-path
+          kept (let [kept (remove (set (map normalized-source-path
                                          (file-link-targets new-body)))
-                            (map source-link-path (file-link-targets old)))]
+                            (map normalized-source-path
+                              (file-link-targets old)))]
                  (remove nil? kept))
-          sources (vec (distinct
-                         (concat kept (map source-link-path add_source_paths))))
+          sources (vec (distinct (concat kept
+                                         (map normalized-source-path
+                                           add_source_paths))))
           content (str front "\n" new-body (sources-section sources))
           relative (relative-to root abs)]
       (fs/write-text
