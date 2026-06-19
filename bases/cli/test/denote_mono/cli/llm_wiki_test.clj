@@ -7,6 +7,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [denote-mono.cli.core :as cli]
+            [denote-mono.filesystem.interface :as fs]
             [denote-mono.llm-wiki.source :as source]
             [litellm.router :as router])
   (:import (java.nio.file Files)
@@ -96,6 +97,18 @@
      :display-name "article",
      :content content,
      :fingerprint {:sha256 (source/sha256 content), :final-url url}}))
+
+(defn- fake-pdf-source
+  [path]
+  (let [content "Fetched CLI PDF text."
+        abs (fs/canonical path)]
+    {:input path,
+     :kind :pdf-file,
+     :path abs,
+     :uri (str "file:" abs),
+     :display-name "paper.pdf",
+     :content content,
+     :fingerprint {:sha256 (source/sha256 content), :mtime 1710000000000}}))
 
 (deftest ingest-command
   (testing "ingest runs the loop and reports created notes"
@@ -193,6 +206,30 @@
       (is (zero? exit))
       (is (= 1 @calls))
       (is (str/includes? out "Filed URL source.")))))
+
+(deftest ingest-pdf-source
+  (testing "PDF sources pass CLI prevalidation and ingest normally"
+    (let [pdf (str (temp-dir "denote-llm-wiki-pdf") "/paper.pdf")
+          _ (spit pdf "%PDF fake")
+          calls (atom 0)
+          {:keys [exit out]}
+            (with-redefs [source/prepare-source (fn [_ source-path _]
+                                                  (swap! calls inc)
+                                                  (is (= pdf source-path))
+                                                  (fake-pdf-source source-path))
+                          router/completion
+                            (scripted
+                              [(step "make alpha"
+                                     "create_note"
+                                     {:title "Alpha PDF",
+                                      :keywords ["pdf"],
+                                      :body "Alpha from PDF."})
+                               (step "done" "finish" {})
+                               (cot "final_text" "r" "Filed PDF source.")])]
+              (run-cli *harness* "llm-wiki" "ingest" pdf))]
+      (is (zero? exit))
+      (is (= 1 @calls))
+      (is (str/includes? out "Filed PDF source.")))))
 
 (deftest ingest-expands-home-source
   (testing "quoted ~/ paths pass CLI prevalidation and ingest normally"

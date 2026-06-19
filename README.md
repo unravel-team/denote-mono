@@ -59,6 +59,8 @@ The CLI degrades gracefully without these, but they make it better:
   `grep` interactive on a terminal: fzf narrows the results, **Enter
   opens the selection in your editor, Ctrl-P prints it** for piping.
 - `rg` (ripgrep) — accelerates `denote grep`.
+- `pdftotext` (Poppler) — required for PDF sources in `denote llm-wiki`
+  ingest.
 - `$VISUAL` / `$EDITOR` — the editor used to open notes (falls back to
   `vi`).
 
@@ -224,10 +226,13 @@ model).
 ```sh
 export ANTHROPIC_API_KEY=...      # or configure :llm in config.edn
 
-# index files or HTTP/HTTPS URLs; the sources themselves are never touched
+# index text files, HTTP/HTTPS URLs, and PDFs; sources themselves are never touched
+# PDF ingest requires pdftotext (Poppler)
 denote llm-wiki ingest ~/notes/lecture-transcript.txt
 denote llm-wiki ingest http://sunnyday.mit.edu/16.355/parnas-criteria.html
+denote llm-wiki ingest ~/notes/paper.pdf
 denote llm-wiki ingest chapter-1.md chapter-2.md chapter-3.md
+# scanned PDFs need OCR first; OCR is not supported yet
 
 # pipe a note query into a batch ingest
 denote find --print0 | xargs -0 denote llm-wiki ingest

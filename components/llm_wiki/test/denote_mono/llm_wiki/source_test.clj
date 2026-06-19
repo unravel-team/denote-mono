@@ -1,9 +1,11 @@
 (ns denote-mono.llm-wiki.source-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [denote-mono.config.interface :as config]
             [denote-mono.filesystem.interface :as fs]
             [denote-mono.llm-wiki.source :as source])
   (:import (com.sun.net.httpserver HttpHandler HttpServer)
+           (java.io File)
            (java.net InetSocketAddress)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files)
@@ -14,7 +16,21 @@
   (str (Files/createTempDirectory "denote-llm-wiki-source-test"
                                   (make-array FileAttribute 0))))
 
-(defn- make-context [home] {:env {"HOME" home}})
+(defn- make-context
+  ([home] (make-context home {}))
+  ([home config-overrides]
+   {:env {"HOME" home},
+    :config (merge-with merge (config/default-config) config-overrides)}))
+
+(defn- fake-pdftotext!
+  [dir text]
+  (let [path (str dir "/fake-pdftotext")
+        file (File. path)]
+    (spit path (str "#!/bin/sh\nprintf '%s' '" text "'\n"))
+    (.setExecutable file true)
+    path))
+
+(defn- ex-from [f] (try (f) nil (catch Exception e e)))
 
 (defn- with-http-server
   [routes f]
@@ -62,6 +78,70 @@
                                             {})]
         (is (= "~/Documents/quoted.txt" (:input prepared)))
         (is (= (str "file:" (fs/canonical path)) (:uri prepared)))))))
+
+(deftest prepare-pdf-source-test
+  (let [dir (temp-dir)
+        pdf (str dir "/paper.pdf")
+        extracted "PDF extracted text about alpha.\n"
+        tool (fake-pdftotext! dir extracted)]
+    (spit pdf "%PDF-1.4 fake bytes")
+    (let [prepared (source/prepare-source
+                     (make-context dir {:tools {:pdftotext [tool]}})
+                     pdf
+                     {})
+          abs (fs/canonical pdf)]
+      (is (= pdf (:input prepared)))
+      (is (= :pdf-file (:kind prepared)))
+      (is (= abs (:path prepared)))
+      (is (= (str "file:" abs) (:uri prepared)))
+      (is (= "paper.pdf" (:display-name prepared)))
+      (is (= extracted (:content prepared)))
+      (testing "PDF source-hash is over extracted text, not raw PDF bytes"
+        (is (= (source/sha256 extracted)
+               (get-in prepared [:fingerprint :sha256])))
+        (is (not= (source/sha256 "%PDF-1.4 fake bytes")
+                  (get-in prepared [:fingerprint :sha256]))))
+      (is (integer? (get-in prepared [:fingerprint :mtime]))))))
+
+(deftest prepare-pdf-expands-home-test
+  (let [home (temp-dir)
+        dir (str home "/Documents")
+        _ (.mkdirs (File. dir))
+        pdf (str dir "/quoted.pdf")
+        tool (fake-pdftotext! home "Quoted PDF text.\n")]
+    (spit pdf "%PDF")
+    (let [prepared (source/prepare-source
+                     (make-context home {:tools {:pdftotext [tool]}})
+                     "~/Documents/quoted.pdf"
+                     {})]
+      (is (= "~/Documents/quoted.pdf" (:input prepared)))
+      (is (= :pdf-file (:kind prepared)))
+      (is (= (str "file:" (fs/canonical pdf)) (:uri prepared))))))
+
+(deftest prepare-pdf-missing-tool-test
+  (let [dir (temp-dir)
+        pdf (str dir "/paper.pdf")]
+    (spit pdf "%PDF")
+    (let [ex (ex-from #(source/prepare-source
+                         (make-context dir
+                                       {:tools {:pdftotext
+                                                ["missing-pdftotext-xyz"]}})
+                         pdf
+                         {}))]
+      (is (= :tool (:type (ex-data ex))))
+      (is (str/includes? (ex-message ex) "pdftotext")))))
+
+(deftest prepare-pdf-blank-text-test
+  (let [dir (temp-dir)
+        pdf (str dir "/scanned.pdf")
+        tool (fake-pdftotext! dir "   \n\t")]
+    (spit pdf "%PDF")
+    (let [ex (ex-from #(source/prepare-source
+                         (make-context dir {:tools {:pdftotext [tool]}})
+                         pdf
+                         {}))]
+      (is (= :validation (:type (ex-data ex))))
+      (is (str/includes? (ex-message ex) "PDF has no extractable text")))))
 
 (deftest prepare-url-source-test
   (with-http-server

@@ -172,9 +172,9 @@
                                  .toEpochMilli)))))))))
 
 (defn validate-source!
-  "Reject a missing, directory, or non-text ingest source. Callers with
-  several sources validate all of them before the first LLM call, so a
-  bad path costs nothing."
+  "Reject a missing, directory, or unsupported ingest source. Callers with
+  several sources prepare all of them before the first LLM call, so a bad
+  source costs nothing."
   [source-path]
   (source/validate-source! source-path))
 

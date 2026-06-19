@@ -123,6 +123,17 @@
                  :last-modified "Tue, 18 Jun 2024 10:00:00 GMT",
                  :final-url url}})
 
+(defn- fake-pdf-source
+  [path content]
+  (let [abs (fs/canonical path)]
+    {:input path,
+     :kind :pdf-file,
+     :path abs,
+     :uri (str "file:" abs),
+     :display-name "paper.pdf",
+     :content content,
+     :fingerprint {:sha256 (source/sha256 content), :mtime 1710000000000}}))
+
 ;;; Scaffold
 
 (deftest scaffold-test
@@ -654,6 +665,54 @@
       (let [skipped (with-redefs [source/prepare-source (fn [& _] prepared)
                                   router/completion (no-llm)]
                       (llm-wiki/ingest context url {:date "2026-06-14"}))]
+        (is (= :skipped (:stopped skipped)))))))
+
+(deftest ingest-pdf-source-test
+  (let [context (make-context)
+        pdf (str (temp-dir) "/paper.pdf")
+        content "Extracted PDF text about alpha."
+        prepared (fake-pdf-source pdf content)
+        requests (atom [])
+        result (with-redefs [source/prepare-source (fn [_ source-path _]
+                                                     (is (= pdf source-path))
+                                                     prepared)
+                             router/completion
+                               (scripted [(step "create alpha"
+                                                "create_note"
+                                                {:title "Alpha PDF",
+                                                 :keywords ["pdf"],
+                                                 :body "Alpha PDF note."})
+                                          (step "done" "finish" {})
+                                          (cot "final_text"
+                                               "reasoned"
+                                               "Created PDF page.")]
+                                         requests)]
+                 (llm-wiki/ingest context pdf {:date "2026-06-15"}))]
+    (is (= :done (:stopped result)))
+    (testing "prompt identifies PDF source metadata and extracted text"
+      (let [prompt (first-prompt requests)]
+        (is (str/includes? prompt (str "Source: " (:uri prepared))))
+        (is (str/includes? prompt "Source type: pdf-file"))
+        (is (str/includes? prompt "Extracted text:"))
+        (is (str/includes? prompt content))))
+    (testing "created note links to the PDF source URI"
+      (is (str/includes? (fs/read-text (wiki-path context
+                                                  (first (:created result))))
+                         (str "(" (:uri prepared) ")"))))
+    (testing
+      "log and history use PDF source identity, extracted text hash, and mtime"
+      (let [log (fs/read-text (wiki-path context "log.md"))
+            history (llm-wiki/ingest-history context (:uri prepared))]
+        (is (str/includes? log (str "- source: " (:uri prepared) "\n")))
+        (is (str/includes? log "- source-kind: pdf-file\n"))
+        (is (str/includes? log "- source-mtime: 1710000000000\n"))
+        (is (= "complete" (:status history)))
+        (is (= "pdf-file" (:source-kind history)))
+        (is (= (source/sha256 content) (:source-hash history)))))
+    (testing "same extracted PDF hash skips without an LLM call"
+      (let [skipped (with-redefs [source/prepare-source (fn [& _] prepared)
+                                  router/completion (no-llm)]
+                      (llm-wiki/ingest context pdf {:date "2026-06-16"}))]
         (is (= :skipped (:stopped skipped)))))))
 
 (deftest ingest-history-url-scopes-to-ingest-test

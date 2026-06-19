@@ -11,6 +11,7 @@
     (is (true? (get-in defaults [:filename :sort-keywords?])))
     (is (= :org (get-in defaults [:filename :file-type])))
     (is (= :numeric (get-in defaults [:sequence :scheme])))
+    (is (= ["pdftotext"] (get-in defaults [:tools :pdftotext])))
     (is (= {} (:silos defaults)))
     (is (nil? (:default-llm-wiki-silo defaults)))
     (is (= {:provider :openrouter,

@@ -28,7 +28,11 @@
                   :rename-mode :sync},
    :links {:rename-id-guard :denote-compatible},
    :sequence {:scheme :numeric},
-   :tools {:fd ["fd"], :rg ["rg"], :fzf ["fzf"], :editor nil}})
+   :tools {:fd ["fd"],
+           :rg ["rg"],
+           :fzf ["fzf"],
+           :pdftotext ["pdftotext"],
+           :editor nil}})
 
 (defn config-path
   "Path of the user config file: $XDG_CONFIG_HOME/denote-mono/config.edn,

@@ -2,7 +2,8 @@
   (:require [clojure.string :as str]
             [denote-mono.config.interface :as config]
             [denote-mono.file-type.interface :as file-type]
-            [denote-mono.filesystem.interface :as fs])
+            [denote-mono.filesystem.interface :as fs]
+            [denote-mono.process.interface :as process])
   (:import (java.io File)
            (java.net URI)
            (java.net.http HttpClient
@@ -80,7 +81,11 @@
       file-uri-path
       (config/expand-home (or (:env context) {}))))
 
-(defn validate-source!
+(defn- pdf-source?
+  [source-path]
+  (str/ends-with? (str/lower-case (str source-path)) ".pdf"))
+
+(defn- validate-source-file!
   [source-path]
   (when-not (fs/exists? source-path)
     (throw (ex-info (str "Source does not exist: " source-path)
@@ -90,26 +95,75 @@
                     {:type :validation, :path source-path})))
   (when (fs/directory? source-path)
     (throw (ex-info (str "Source is a directory: " source-path)
-                    {:type :validation, :path source-path})))
-  (when-not (file-type/text-file? source-path)
-    (throw (ex-info (str "Source is not a supported text file: " source-path)
                     {:type :validation, :path source-path}))))
 
+(defn validate-source!
+  [source-path]
+  (validate-source-file! source-path)
+  (when-not (or (pdf-source? source-path) (file-type/text-file? source-path))
+    (throw (ex-info (str "Source is not a supported text or PDF file: "
+                         source-path)
+                    {:type :validation, :path source-path}))))
+
+(defn- pdftotext-argv
+  [context source-path]
+  (into (vec (get-in context [:config :tools :pdftotext] ["pdftotext"]))
+        ["-layout" source-path "-"]))
+
+(defn- run-pdftotext
+  [context source-path]
+  (let [argv (pdftotext-argv context source-path)
+        {:keys [exit out err error]} (process/run argv {})]
+    (when-not (= 0 exit)
+      (throw (ex-info (str "pdftotext failed for PDF source: "
+                           source-path
+                           (if (= :missing-binary error)
+                             " (missing binary)"
+                             (str " (exit " exit ")"))
+                           (when-not (str/blank? err) (str " " err)))
+                      {:type :tool,
+                       :path source-path,
+                       :command argv,
+                       :exit exit,
+                       :error error,
+                       :stderr err})))
+    (when (str/blank? out)
+      (throw (ex-info (str "PDF has no extractable text; OCR not supported yet"
+                           " for "
+                           source-path)
+                      {:type :validation, :path source-path})))
+    out))
+
+(defn- build-file-source
+  [source-ref source-path kind content]
+  {:input source-ref,
+   :kind kind,
+   :path source-path,
+   :uri (file-uri source-path),
+   :display-name (display-name source-path),
+   :content content,
+   :fingerprint {:sha256 (sha256 content),
+                 :mtime (.toEpochMilli ^java.time.Instant
+                                       (fs/file-mtime source-path))}})
+
+(defn- prepare-pdf-source
+  [context source-ref source-path]
+  (let [content (run-pdftotext context source-path)]
+    (build-file-source source-ref source-path :pdf-file content)))
+
 (defn prepare-file-source
-  "Return a canonical source record for local text-file PATH."
+  "Return a canonical source record for a local file."
   [context source-path _opts]
   (let [expanded (normalize-source-path context source-path)
-        _ (validate-source! expanded)
-        path (fs/canonical expanded)
-        content (fs/read-text path)
-        mtime (.toEpochMilli ^java.time.Instant (fs/file-mtime path))]
-    {:input source-path,
-     :kind :text-file,
-     :path path,
-     :uri (file-uri path),
-     :display-name (display-name path),
-     :content content,
-     :fingerprint {:sha256 (sha256 content), :mtime mtime}}))
+        path (fs/canonical expanded)]
+    (validate-source-file! path)
+    (if (pdf-source? path)
+      (prepare-pdf-source context source-path path)
+      (do (when-not (file-type/text-file? path)
+            (throw (ex-info (str "Source is not a supported text file: " path)
+                            {:type :validation, :path path})))
+          (let [content (fs/read-text path)]
+            (build-file-source source-path path :text-file content))))))
 
 (defn- first-header
   [^HttpHeaders headers name]
@@ -279,8 +333,8 @@
 (defn prepare-source
   "Return a canonical source record for SOURCE.
 
-  SOURCE may be a local text file path (including `~/` or `file:`) or an
-  HTTP/HTTPS URL."
+  SOURCE may be a local text/PDF file path (including `~/` or `file:`) or
+  an HTTP/HTTPS URL."
   [context source opts]
   (if (url? source)
     (prepare-url-source context source opts)

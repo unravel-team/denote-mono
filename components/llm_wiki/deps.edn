@@ -8,5 +8,6 @@
         denote-mono/front-matter {:local/root "../front_matter"}
         denote-mono/llm {:local/root "../llm"}
         denote-mono/note {:local/root "../note"}
+        denote-mono/process {:local/root "../process"}
         denote-mono/search {:local/root "../search"}
         denote-mono/sequence {:local/root "../sequence"}}}
