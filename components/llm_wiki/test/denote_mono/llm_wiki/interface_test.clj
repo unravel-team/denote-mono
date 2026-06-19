@@ -349,6 +349,29 @@
       (is (str/includes? sources (str "(" new-url ")")))
       (is (not (str/includes? sources "https://example.com/body"))))))
 
+(deftest execute-tool-update-note-drops-relative-source-refs-test
+  (let [context (make-context)
+        absolute-source (str (temp-dir) "/absolute.pdf")
+        _ (spit absolute-source "%PDF")
+        note (write-note! context
+                          {:id "20240101T000000",
+                           :sig "1",
+                           :title "Alpha",
+                           :keywords ["ml"],
+                           :body (str "Old body.\n\n## Sources\n\n"
+                                      "- [relative](file:sources/foo.pdf)\n"
+                                      "- [absolute](file:"
+                                      absolute-source
+                                      ")\n")})
+        state (atom {:created [], :updated [], :default-sources []})
+        execute (llm-wiki/make-execute-tool context state)
+        relative (subs note (inc (count (get-in context [:silo :path]))))]
+    (execute "update_note" {:path relative, :body "New body."})
+    (let [content (fs/read-text note)
+          sources (subs content (str/index-of content "## Sources"))]
+      (is (not (str/includes? sources "file:sources/foo.pdf")))
+      (is (str/includes? sources (str "(file:" absolute-source ")"))))))
+
 (deftest execute-tool-read-and-list-test
   (let [context (make-context)
         _ (write-note! context

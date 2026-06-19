@@ -143,14 +143,20 @@
                     str/trim)]
     (when-not (str/blank? ref) ref)))
 
+(defn- absolute-file-ref?
+  [ref]
+  (.isAbsolute (java.io.File. ^String (source/file-uri-path ref))))
+
 (defn normalize-source-ref
-  "Normalize an already persisted source ref. URLs and existing file: URIs stay
-  unchanged; local paths become file: URIs without further canonicalization."
+  "Normalize an already persisted source ref. URLs stay unchanged. Absolute
+  file: URIs and absolute local paths become persisted file: URIs. Relative
+  file refs are ignored because OKF imports must resolve bundled citations
+  before writing llm-wiki provenance."
   [ref]
   (when-let [ref (nonblank-source-ref ref)]
     (cond (source/url? ref) ref
-          (str/starts-with? ref "file:") ref
-          :else (str "file:" (source/file-uri-path ref)))))
+          (str/starts-with? ref "file:") (when (absolute-file-ref? ref) ref)
+          (absolute-file-ref? ref) (str "file:" (source/file-uri-path ref)))))
 
 (defn- canonical-source-ref
   "Normalize a newly supplied tool source ref to a persisted URI."
