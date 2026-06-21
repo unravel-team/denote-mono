@@ -101,7 +101,7 @@ default, and (optionally) tune the `:llm` provider map:
        :model "moonshotai/kimi-k2.6"
        :api-key-env "OPENROUTER_API_KEY"
        :api-base nil
-       :max-rounds 20
+       :max-rounds 100
        :timeout-ms 300000}}
 ```
 
