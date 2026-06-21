@@ -1,4 +1,3 @@
-;;; How to start a development REPL: `clojure -M:dev:test:logs-dev:cider`
 {:aliases
  {:dev {:extra-deps
         {;; Components
