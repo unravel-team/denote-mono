@@ -20,15 +20,75 @@ end, and architecture decisions in [docs/adr](docs/adr/README.md).
 
 ## Installation
 
-Build from source (requires Java 11+, the
-[Clojure CLI](https://clojure.org/guides/install_clojure), and GNU make):
+### Install script (macOS/Linux)
 
 ```sh
-git clone <this-repo> && cd denote-mono
+curl -fsSL https://raw.githubusercontent.com/unravel-team/denote-mono/main/install.sh | sh
+```
+
+The script downloads the latest release asset matching your OS and CPU,
+verifies it against `checksums.txt` when available, and installs
+`denote` to `~/.local/bin`. Release automation publishes these assets:
+
+- `denote-mono-vX.Y.Z-macos-arm64.tar.gz`
+- `denote-mono-vX.Y.Z-macos-x64.tar.gz`
+- `denote-mono-vX.Y.Z-linux-arm64.tar.gz`
+- `denote-mono-vX.Y.Z-linux-x64.tar.gz`
+
+Override the version or destination like this:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/unravel-team/denote-mono/main/install.sh \
+  | VERSION=vX.Y.Z BINDIR=/usr/local/bin sh
+```
+
+### Homebrew (macOS/Linux)
+
+After the Homebrew tap formula is published, install with:
+
+```sh
+brew install unravel-team/tap/denote-mono
+```
+
+The tap formula should point at the same GitHub Release archives and
+checksums as the install script.
+
+### Manual GitHub Releases download
+
+Download a native archive from
+[GitHub Releases](https://github.com/unravel-team/denote-mono/releases/latest),
+then install the binary inside it:
+
+```sh
+asset=denote-mono-vX.Y.Z-macos-arm64.tar.gz
+tar -xzf "$asset"
+install -m 755 "${asset%.tar.gz}/denote" ~/.local/bin/denote
+denote --version
+```
+
+Release assets include `checksums.txt` for SHA-256 verification. Filter it
+to the one archive you downloaded:
+
+```sh
+awk -v asset="$asset" '$2 == asset {print}' checksums.txt | shasum -a 256 -c -   # macOS
+awk -v asset="$asset" '$2 == asset {print}' checksums.txt | sha256sum -c -       # Linux
+```
+
+macOS release binaries are not signed or notarized yet, so Gatekeeper may
+show a warning until Apple Developer ID signing is added.
+
+### Build from source
+
+Requires Java 11+, the
+[Clojure CLI](https://clojure.org/guides/install_clojure), and GNU make:
+
+```sh
+git clone https://github.com/unravel-team/denote-mono.git
+cd denote-mono
 make test
 ```
 
-### Native binary (recommended)
+### Build a native binary from source
 
 A self-contained ~20 MB executable with ~10 ms startup. You need GraalVM
 with `native-image`:

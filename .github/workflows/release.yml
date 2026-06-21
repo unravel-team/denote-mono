@@ -1,0 +1,142 @@
+name: Release native binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    name: Build ${{ matrix.platform }} native binary
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: macos-13
+            platform: macos
+            arch: x64
+          - runner: macos-14
+            platform: macos
+            arch: arm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          distribution: graalvm
+          java-version: "21"
+          components: native-image
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Clojure tools
+        uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+          clj-kondo: "2026.05.25"
+          zprint: "1.3.0"
+
+      - name: Install tagref
+        run: cargo install tagref --version 1.10.0 --locked
+
+      - name: Build native binary
+        run: make native
+
+      - name: Package release artifact
+        id: package
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          case "$(uname -m)" in
+            x86_64|amd64) detected_arch="x64" ;;
+            arm64|aarch64) detected_arch="arm64" ;;
+            *) detected_arch="$(uname -m)" ;;
+          esac
+
+          if [ "$detected_arch" != "$ARCH" ]; then
+            echo "Runner architecture mismatch: expected $ARCH, got $detected_arch" >&2
+            exit 1
+          fi
+
+          name="denote-mono-${TAG}-${PLATFORM}-${ARCH}"
+          mkdir -p "dist/${name}"
+          cp projects/denote-cli/target/denote "dist/${name}/denote"
+          cp LICENSE "dist/${name}/LICENSE"
+          chmod 755 "dist/${name}/denote"
+          cat > "dist/${name}/README-install.txt" <<EOF
+          denote-mono ${TAG} (${PLATFORM}-${ARCH})
+
+          Install:
+            install -m 755 denote ~/.local/bin/denote
+            denote --version
+
+          If ~/.local/bin is not on PATH, add it to your shell profile.
+          EOF
+
+          (cd dist && tar -czf "${name}.tar.gz" "${name}")
+          echo "asset=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "asset_name=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset_name }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-native
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: denote-mono-*.tar.gz
+          merge-multiple: true
+
+      - name: Generate checksums.txt
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.tar.gz | sort -k 2 > checksums.txt
+          cat checksums.txt
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading assets."
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --notes "Native binary release for $TAG."
+          fi
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            dist/*.tar.gz \
+            dist/checksums.txt \
+            --clobber

@@ -12,9 +12,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/vedang/denote-mono.git"
+    "url": "git+https://github.com/unravel-team/denote-mono.git"
   },
-  "homepage": "https://github.com/vedang/denote-mono",
+  "homepage": "https://github.com/unravel-team/denote-mono",
   "license": "GPL-3.0-only",
   "pi": {
     "skills": [
