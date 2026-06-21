@@ -5,3 +5,4 @@ target/
 .nrepl-port
 .agents/plans/
 .pi/extensions/simplify-code.json
+.antqtool.lastupdated
