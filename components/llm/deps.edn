@@ -7,4 +7,4 @@
  :deps {tech.unravel/dscloj
           {:local/root "/Users/nejo/src/unravel-team/DSCloj/DSCloj.root"
            :exclusions [ch.qos.logback/logback-classic]}
-        org.clojure/data.json {:mvn/version "2.5.0"}}}
+        org.clojure/data.json {:mvn/version "2.5.2"}}}
