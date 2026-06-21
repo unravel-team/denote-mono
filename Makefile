@@ -1,3 +1,5 @@
+HOME := $(shell echo $$HOME)
+HERE := $(shell echo $$PWD)
 CLOJURE_SOURCES := $(shell find . -name '*.clj' -not -path './.clj-kondo/*' -not -path './target/*' -not -path './projects/*/target/*')
 
 SHELL = /bin/bash -Eeu
@@ -18,9 +20,59 @@ doctor: ## Verify toolchain prerequisites
 	done
 	@echo "denote-mono Clojure/Polylith scaffold ready."
 
+.PHONY: init
+init: install-kondo-configs install-zprint-config     ## Bootstrap tooling
+
+.clj-kondo:
+	mkdir .clj-kondo
+
+.PHONY: install-kondo-configs
+install-kondo-configs: .clj-kondo
+	clj-kondo --lint "$$(clojure -A:dev:test:cider:build -Spath)" --copy-configs --skip-lint
+
+.PHONY: check-zprint-config
+check-zprint-config:
+	@echo "Checking (HOME)/.zprint.edn..."
+	@if [ ! -f "$(HOME)/.zprint.edn" ]; then \
+		echo "Error: ~/.zprint.edn not found"; \
+		echo "Please create ~/.zprint.edn with the content: {:search-config? true}"; \
+		exit 1; \
+	fi
+	@if ! grep -q "search-config?" "$(HOME)/.zprint.edn"; then \
+		echo "Warning: ~/.zprint.edn might not contain required {:search-config? true} setting"; \
+		echo "Please ensure this setting is present for proper functionality"; \
+		exit 1; \
+	fi
+
+.zprint.edn:
+	@echo "Creating .zprint.edn..."
+	@echo '{:fn-map {"with-context" "with-meta"}, :map {:indent 0}}' > $@
+
+.dir-locals.el:
+	@echo "Creating .dir-locals.el..."
+	@echo ';;; Directory Local Variables         -*- no-byte-compile: t; -*-' > $@
+	@echo ';;; For more information see (info "(emacs) Directory Variables")' >> $@
+	@echo '((clojure-dart-ts-mode . ((apheleia-formatter . (zprint))))' >> $@
+	@echo ' (clojure-jank-ts-mode . ((apheleia-formatter . (zprint))))' >> $@
+	@echo ' (clojure-mode . ((apheleia-formatter . (zprint))))' >> $@
+	@echo ' (clojure-ts-mode . ((apheleia-formatter . (zprint))))' >> $@
+	@echo ' (clojurec-mode . ((apheleia-formatter . (zprint))))' >> $@
+	@echo ' (clojurec-ts-mode . ((apheleia-formatter . (zprint))))' >> $@
+	@echo ' (clojurescript-mode . ((apheleia-formatter . (zprint))))' >> $@
+	@echo ' (clojurescript-ts-mode . ((apheleia-formatter . (zprint)))))' >> $@
+
+.PHONY: install-zprint-config
+install-zprint-config: check-zprint-config .zprint.edn .dir-locals.el
+	@echo "zprint configuration files created successfully."
+
+# The Clojure CLI aliases that will be selected for main options for `repl`.
+# Feel free to upgrade this, or to override it with an env var named DEPS_MAIN_OPTS.
+# Expected format: "-M:alias1:alias2"
+DEPS_MAIN_OPTS ?= "-M:dev:test:logs-dev:cider"
+
 .PHONY: repl
-repl: ## Launch a REPL using the Clojure CLI
-	clojure -M:dev:test
+repl:    ## Launch a REPL using the Clojure CLI
+	clojure $(DEPS_MAIN_OPTS);
 
 .PHONY: check-tagref
 check-tagref:
@@ -61,6 +113,10 @@ test-poly: ## Run Polylith tests
 
 .PHONY: test
 test: test-unit ## Run default test suite
+
+.PHONY: test-coverage
+test-coverage:   # Run coverage reports for the code using Clofidence
+	clojure -X:dev:test:clofidence
 
 .PHONY: build
 build: check ## Build denote-cli uberjar
@@ -117,3 +173,20 @@ current-version: ## Bump the major version (minor resets to 0) and commit the bu
 	@major=$$(perl -ne 'print $$1 if /:major-version (\d+)/' $(VERSION_DEPS)); \
 	minor=$$(perl -ne 'print $$1 if /:minor-version (\d+)/' $(VERSION_DEPS)); \
 	echo "$$major.$$minor.$$(git rev-list --count HEAD 2>/dev/null || echo '?')"
+
+.PHONY: install-antq
+install-antq:
+	@if [ -f .antqtool.lastupdated ] && find .antqtool.lastupdated -mtime +15 -print | grep -q .; then \
+		echo "Updating antq tool to the latest version..."; \
+		clojure -Ttools install-latest :lib com.github.liquidz/antq :as antq; \
+		touch .antqtool.lastupdated; \
+	else \
+		echo "Skipping antq tool update..."; \
+	fi
+
+.antqtool.lastupdated:
+	touch .antqtool.lastupdated
+
+.PHONY: upgrade-deps
+upgrade-deps: .antqtool.lastupdated install-antq    ## Upgrade all dependencies to their latest versions
+	clojure -Tantq outdated :check-clojure-tools true :upgrade true

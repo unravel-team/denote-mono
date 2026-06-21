@@ -1,6 +1,6 @@
-;;; How to start a development REPL: `clojure -M:dev:test`
+;;; How to start a development REPL: `clojure -M:dev:test:logs-dev:cider`
 {:license {:name "GNU General Public License v3.0"
-            :url "https://www.gnu.org/licenses/gpl-3.0.txt"}
+           :url "https://www.gnu.org/licenses/gpl-3.0.txt"}
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases
  {:dev
@@ -79,4 +79,41 @@
   {:deps {io.github.clojure/tools.build {:mvn/version "0.10.5"}
           io.github.seancorfield/build-clj {:git/tag "v0.9.2"
                                             :git/sha "9c9f078"}}
-   :ns-default build}}}
+   :ns-default build}
+
+  :logs-dev
+  {:jvm-opts
+   ["-Dclojure.tools.logging.factory=clojure.tools.logging.impl/log4j2-factory"
+    "-Dorg.eclipse.jetty.util.log.class=org.eclipse.jetty.util.log.Slf4jLog"
+    "-Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector"
+    "-Dlog4j2.configurationFile=logger/log4j2.xml"
+    ;; Change logging.level to one of TRACE, DEBUG, INFO, WARN, ERROR
+    ;; depending on requirement during development
+    "-Dlogging.level=DEBUG"]}
+
+  :cider ;; Tooling dependencies
+  {:classpath-overrides
+   ;; we need to disable the official compiler and use ClojureStorm
+   {org.clojure/clojure nil},
+   :extra-deps {cider/cider-nrepl {:mvn/version "0.49.0"},
+                com.github.flow-storm/clojure {:mvn/version "1.12.5-1"},
+                com.github.flow-storm/flow-storm-dbg {:mvn/version "4.6.0"},
+                mx.cider/tools.deps.enrich-classpath {:mvn/version "1.19.3"},
+                nrepl/nrepl {:mvn/version "1.2.0"},
+                refactor-nrepl/refactor-nrepl {:mvn/version "3.10.0"}},
+   :main-opts
+   ["-m" "nrepl.cmdline" "--middleware"
+    "[flow-storm.nrepl.middleware/wrap-flow-storm,cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"],
+   :jvm-opts ["-Dclojure.storm.instrumentEnable=true"
+              "-Dclojure.storm.instrumentOnlyPrefixes=denote-mono."]},
+
+  :clofidence ;; Test Coverage, run with `clj -X:dev:test:clofidence`
+  {:classpath-overrides {org.clojure/clojure nil},
+   :exec-args {:report-name "Denote-Monorepo Coverage Report",
+               :test-fn cognitect.test-runner.api/test,
+               :test-fn-args [{}]},
+   :exec-fn clofidence.main/run,
+   :extra-deps {com.github.flow-storm/clofidence {:mvn/version "0.5.0"},
+                com.github.flow-storm/clojure {:mvn/version "1.12.5-1"}},
+   :jvm-opts ["-Dclojure.storm.instrumentOnlyPrefixes=denote-mono."
+              "-Dclojure.storm.instrumentSkipRegex=.*test.*"]}}}
