@@ -18,7 +18,7 @@
             :model "moonshotai/kimi-k2.6",
             :api-key-env "OPENROUTER_API_KEY",
             :api-base nil,
-            :max-rounds 20,
+            :max-rounds 100,
             :max-tokens 8192,
             :timeout-ms 300000}
            (:llm defaults)))))

@@ -82,8 +82,8 @@
                         {:type :validation, :silo name}))))
     (when (and default-silo (not (contains? silos default-silo)))
       (throw (ex-info
-              (str ":default-silo " default-silo " is not a configured silo")
-              {:type :validation, :silos (keys silos)})))
+               (str ":default-silo " default-silo " is not a configured silo")
+               {:type :validation, :silos (keys silos)})))
     (when default-wiki
       (when-not (contains? silos default-wiki)
         (throw (ex-info (str ":default-llm-wiki-silo "
@@ -93,6 +93,6 @@
       (when-not (true? (get-in silos [default-wiki :llm-wiki]))
         (throw (ex-info (str ":default-llm-wiki-silo " default-wiki
                              " is not an llm-wiki silo; flag it with"
-                             " :llm-wiki true")
+                               " :llm-wiki true")
                         {:type :validation, :silo default-wiki}))))
     config))
