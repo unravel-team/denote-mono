@@ -28,12 +28,8 @@ curl -fsSL https://raw.githubusercontent.com/unravel-team/denote-mono/main/insta
 
 The script downloads the latest release asset matching your OS and CPU,
 verifies it against `checksums.txt` when available, and installs
-`denote` to `~/.local/bin`. Release automation publishes these assets:
-
-- `denote-mono-vX.Y.Z-macos-arm64.tar.gz`
-- `denote-mono-vX.Y.Z-macos-x64.tar.gz`
-- `denote-mono-vX.Y.Z-linux-arm64.tar.gz`
-- `denote-mono-vX.Y.Z-linux-x64.tar.gz`
+`denote` to `~/.local/bin`. Release automation publishes archives named
+`denote-mono-vX.Y.Z-{macos,linux}-{arm64,x64}.tar.gz`.
 
 Override the version or destination like this:
 

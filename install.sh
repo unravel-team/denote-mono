@@ -22,8 +22,36 @@ api_curl() {
   fi
 }
 
-download_curl() {
-  curl -fsSL "$@"
+verify_checksum() {
+  archive=$1
+  asset=$2
+  checksum_url=$3
+  checksum_file=$4
+
+  if ! curl -fsSL -o "$checksum_file" "$checksum_url" 2>/dev/null; then
+    echo "warning: checksums.txt unavailable; skipping verification" >&2
+    return 0
+  fi
+
+  expected="$(awk -v asset="$asset" '$2 == asset {print $1; exit}' "$checksum_file")"
+  if [ -z "$expected" ]; then
+    echo "warning: no checksum entry for $asset; skipping verification" >&2
+    return 0
+  fi
+
+  if ! actual="$(sha256 "$archive")"; then
+    echo "warning: sha256sum/shasum not found; skipping checksum verification" >&2
+    return 0
+  fi
+
+  if [ "$actual" != "$expected" ]; then
+    echo "error: checksum mismatch for $asset" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  fi
+
+  echo "Checksum verified."
 }
 
 detect_os() {
@@ -61,18 +89,14 @@ sha256() {
 need curl
 need tar
 need awk
-need sed
-need head
 need mktemp
-need find
 
 os="${OS:-$(detect_os)}"
 arch="${ARCH:-$(detect_arch)}"
 
 if [ "$VERSION" = "latest" ]; then
   tag="$(api_curl "https://api.github.com/repos/$REPO/releases/latest" \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -n 1)"
+    | awk -F '"' '/"tag_name"[[:space:]]*:/ {print $4; exit}')"
   if [ -z "$tag" ]; then
     echo "error: could not resolve latest release for $REPO" >&2
     exit 1
@@ -96,34 +120,15 @@ trap cleanup EXIT INT TERM
 
 archive="$tmp/$asset"
 echo "Downloading $asset from $REPO..."
-download_curl -o "$archive" "$base_url/$asset"
+curl -fsSL -o "$archive" "$base_url/$asset"
 
 checksum_file="$tmp/checksums.txt"
-if download_curl -o "$checksum_file" "$base_url/checksums.txt" 2>/dev/null; then
-  expected="$(awk -v asset="$asset" '$2 == asset {print $1; exit}' "$checksum_file")"
-  if [ -n "$expected" ]; then
-    if actual="$(sha256 "$archive")"; then
-      if [ "$actual" != "$expected" ]; then
-        echo "error: checksum mismatch for $asset" >&2
-        echo "expected: $expected" >&2
-        echo "actual:   $actual" >&2
-        exit 1
-      fi
-      echo "Checksum verified."
-    else
-      echo "warning: sha256sum/shasum not found; skipping checksum verification" >&2
-    fi
-  else
-    echo "warning: no checksum entry for $asset; skipping verification" >&2
-  fi
-else
-  echo "warning: checksums.txt unavailable; skipping verification" >&2
-fi
+verify_checksum "$archive" "$asset" "$base_url/checksums.txt" "$checksum_file"
 
 tar -xzf "$archive" -C "$tmp"
-bin_path="$(find "$tmp" -type f -name denote | head -n 1)"
-if [ -z "$bin_path" ]; then
-  echo "error: archive did not contain denote binary" >&2
+bin_path="$tmp/${asset%.tar.gz}/denote"
+if [ ! -f "$bin_path" ]; then
+  echo "error: archive did not contain $bin_path" >&2
   exit 1
 fi
 
