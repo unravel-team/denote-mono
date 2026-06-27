@@ -5,8 +5,9 @@
  ;; Pinned to DSCloj main (PR #8 squash-merged), which pins litellm-clj
  ;; v0.4.170 with the provider support that used to come from a
  ;; machine-local checkout.
+ ;; Pin main by SHA until DSCloj cuts a Clojars release with these APIs.
  :deps {tech.unravel/dscloj
-          {:git/url "https://github.com/unravel-team/DSCloj.git"
-           :git/sha "fb1ae8548a072fce1c0862fce4a56cf5118a59cd"
-           :exclusions [ch.qos.logback/logback-classic]}
+        {:git/url "https://github.com/unravel-team/DSCloj.git"
+         :git/sha "fb1ae8548a072fce1c0862fce4a56cf5118a59cd"
+         :exclusions [ch.qos.logback/logback-classic]}
         org.clojure/data.json {:mvn/version "2.5.2"}}}
