@@ -86,6 +86,116 @@ sha256() {
   fi
 }
 
+# Optional runtime tools: denote works without them, but they unlock
+# interactive selection (fzf), faster search (rg, fd), and PDF ingest
+# (pdftotext). See "Runtime tools" in the README.
+tool_hint() {
+  case "$1" in
+    fzf) echo "interactive selection for 'denote find' and 'denote grep'" ;;
+    rg) echo "faster 'denote grep' (ripgrep)" ;;
+    fd) echo "faster file listing" ;;
+    pdftotext) echo "PDF ingest for 'denote llm-wiki' (poppler)" ;;
+  esac
+}
+
+tool_present() {
+  case "$1" in
+    # Debian/Ubuntu package fd-find installs the binary as fdfind
+    fd) command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 ;;
+    *) command -v "$1" >/dev/null 2>&1 ;;
+  esac
+}
+
+detect_pkg_manager() {
+  if command -v brew >/dev/null 2>&1; then
+    echo brew
+  elif command -v apt-get >/dev/null 2>&1; then
+    echo apt-get
+  elif command -v dnf >/dev/null 2>&1; then
+    echo dnf
+  elif command -v pacman >/dev/null 2>&1; then
+    echo pacman
+  fi
+}
+
+pkg_name() {
+  tool=$1
+  manager=$2
+  case "$tool" in
+    fzf) echo fzf ;;
+    rg) echo ripgrep ;;
+    fd)
+      case "$manager" in
+        apt-get|dnf) echo fd-find ;;
+        *) echo fd ;;
+      esac
+      ;;
+    pdftotext)
+      case "$manager" in
+        apt-get|dnf) echo poppler-utils ;;
+        *) echo poppler ;;
+      esac
+      ;;
+  esac
+}
+
+install_cmd() {
+  manager=$1
+  pkg=$2
+  sudo_prefix="sudo "
+  if [ "$(id -u)" = "0" ]; then
+    sudo_prefix=""
+  fi
+  case "$manager" in
+    brew) echo "brew install $pkg" ;;
+    apt-get) echo "${sudo_prefix}apt-get install -y $pkg" ;;
+    dnf) echo "${sudo_prefix}dnf install -y $pkg" ;;
+    pacman) echo "${sudo_prefix}pacman -S --noconfirm $pkg" ;;
+  esac
+}
+
+offer_optional_tools() {
+  missing=""
+  for tool in fzf rg fd pdftotext; do
+    tool_present "$tool" || missing="$missing $tool"
+  done
+  if [ -z "$missing" ]; then
+    return 0
+  fi
+
+  echo ""
+  echo "Optional tools that improve denote are missing:"
+  for tool in $missing; do
+    echo "  $tool - $(tool_hint "$tool")"
+  done
+
+  manager="$(detect_pkg_manager)"
+  if [ -z "$manager" ]; then
+    echo "No supported package manager found (brew/apt-get/dnf/pacman);" \
+      "install them manually if you want them."
+    return 0
+  fi
+
+  # stdin is the script itself under `curl | sh`, so prompt via /dev/tty.
+  if [ -n "${NONINTERACTIVE:-}" ] || ! (exec </dev/tty) 2>/dev/null; then
+    echo "To install them:"
+    for tool in $missing; do
+      echo "  $(install_cmd "$manager" "$(pkg_name "$tool" "$manager")")"
+    done
+    return 0
+  fi
+
+  for tool in $missing; do
+    cmd="$(install_cmd "$manager" "$(pkg_name "$tool" "$manager")")"
+    printf 'Run %s? (y/n) ' "$cmd"
+    read -r answer </dev/tty || answer=n
+    case "$answer" in
+      y|Y|yes|YES) $cmd || echo "warning: failed to install $tool; continuing" >&2 ;;
+      *) echo "Skipped $tool." ;;
+    esac
+  done
+}
+
 need curl
 need tar
 need awk
@@ -146,3 +256,5 @@ case ":$PATH:" in
   *) echo "Add $BINDIR to PATH to run $BIN_NAME from any directory." ;;
 esac
 "$BINDIR/$BIN_NAME" --version || true
+
+offer_optional_tools

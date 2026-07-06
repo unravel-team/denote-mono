@@ -116,10 +116,17 @@ Some features use external tools when available; PDF ingest requires one:
   `grep` interactive on a terminal: fzf narrows the results, **Enter
   opens the selection in your editor, Ctrl-P prints it** for piping.
 - `rg` (ripgrep) — accelerates `denote grep`.
+- `fd` — accelerates file listing.
 - `pdftotext` (Poppler) — required for PDF sources in `denote llm-wiki`
   ingest.
 - `$VISUAL` / `$EDITOR` — the editor used to open notes (falls back to
   `vi`).
+
+The install script checks for these at the end of a run and, when a
+package manager is available (`brew`, `apt-get`, `dnf`, or `pacman`),
+offers to install the missing ones (`Run brew install fzf? (y/n)`). Set
+`NONINTERACTIVE=1` to skip the prompts; it then just prints the install
+commands.
 
 ### Shell completions
 
