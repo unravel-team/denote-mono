@@ -116,7 +116,8 @@ Some features use external tools when available; PDF ingest requires one:
   `grep` interactive on a terminal: fzf narrows the results, **Enter
   opens the selection in your editor, Ctrl-P prints it** for piping.
 - `rg` (ripgrep) — accelerates `denote grep`.
-- `fd` — accelerates file listing.
+- `fd` — accelerates the note listing behind `denote find`, `links`,
+  and `backlinks`.
 - `pdftotext` (Poppler) — required for PDF sources in `denote llm-wiki`
   ingest.
 - `$VISUAL` / `$EDITOR` — the editor used to open notes (falls back to

@@ -9,8 +9,13 @@
 
 (defn- silo-fixture
   [f]
-  (let [root (str (Files/createTempDirectory "denote-search-test"
-                                             (make-array FileAttribute 0)))]
+  ;; toRealPath: fd echoes paths under the root it is given, and list-notes
+  ;; derives :relative-path from the canonical root, so the fixture root
+  ;; must already be canonical (on macOS /var -> /private/var).
+  (let [root (str (.toRealPath (Files/createTempDirectory
+                                 "denote-search-test"
+                                 (make-array FileAttribute 0))
+                               (make-array java.nio.file.LinkOption 0)))]
     (spit (str root "/20240101T000000--alpha__clojure.org") "alpha")
     (spit (str root "/20240102T000000==1--beta__notes.org") "beta")
     (spit (str root "/20240103T000000--gamma__clojure_notes.md") "gamma")
@@ -50,6 +55,57 @@
   (testing ":query free-text filter is case-insensitive on relative path"
     (is (= ["alpha"]
            (titles (search/list-notes (context) {:query "ALPHA"} {}))))))
+
+(defn- fake-fd!
+  "Write an executable script that prints ENTRIES NUL-separated and exits
+  with EXIT-CODE, standing in for fd."
+  [entries exit-code]
+  (let [f (java.io.File/createTempFile "fake-fd" ".sh")]
+    (spit f
+          (str "#!/bin/sh\n"
+               (apply str (map #(str "printf '%s\\0' '" % "'\n") entries))
+               "exit "
+               exit-code
+               "\n"))
+    (.setExecutable f true)
+    (.deleteOnExit f)
+    (str f)))
+
+(defn- fd-context [fd-argv] {:silo *silo*, :config {:tools {:fd fd-argv}}})
+
+(deftest list-notes-fd-test
+  (let [root (:path *silo*)
+        alpha (str root "/20240101T000000--alpha__clojure.org")]
+    (testing "fd output is the file source when the configured fd runs"
+      (let [fd (fake-fd! [alpha] 0)]
+        (is (= ["alpha"]
+               (titles (search/list-notes (fd-context [fd]) {} {}))))))
+    (testing "fd entries outside the silo root are dropped"
+      ;; [ref:silo_path_containment]
+      (let [outside (str (Files/createTempDirectory "denote-search-outside"
+                                                    (make-array FileAttribute
+                                                                0)))
+            trap (str outside "/20240109T000000--trap__kw.org")]
+        (spit trap "outside")
+        (let [fd (fake-fd! [trap alpha] 0)]
+          (is (= ["alpha"]
+                 (titles (search/list-notes (fd-context [fd]) {} {})))))))
+    (testing "fd entries that are backup files are dropped"
+      (let [backup (str root "/20240101T000000--alpha__clojure.org~")]
+        (spit backup "backup")
+        (let [fd (fake-fd! [alpha backup] 0)]
+          (is (= ["alpha"]
+                 (titles (search/list-notes (fd-context [fd]) {} {})))))))
+    (testing "a failing fd falls back to the directory walk"
+      (let [fd (fake-fd! [] 1)]
+        (is (= #{"alpha" "beta" "gamma" "no-id"}
+               (set (titles (search/list-notes (fd-context [fd]) {} {})))))))
+    (testing "a missing fd binary falls back to the directory walk"
+      (is (= #{"alpha" "beta" "gamma" "no-id"}
+             (set (titles (search/list-notes (fd-context
+                                               ["/nonexistent/denote-fd"])
+                                             {}
+                                             {}))))))))
 
 (deftest grep-test
   (spit (str (:path *silo*) "/20240101T000000--alpha__clojure.org")

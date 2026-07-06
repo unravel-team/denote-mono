@@ -37,12 +37,70 @@
        (or (nil? id) (= id (:identifier filename)))
        (or (nil? query) (str/includes? (str/lower-case relative-path) query))))
 
+(defn- parent-dir
+  [path]
+  (let [i (str/last-index-of path "/")]
+    (when (and i (pos? i)) (subs path 0 i))))
+
+(defn- under-excluded-dir?
+  "True when an ancestor directory of PATH below ROOT matches PATTERN,
+  mirroring how the directory walk prunes excluded directories."
+  [pattern root path]
+  (loop [dir (parent-dir path)]
+    (cond (or (nil? dir) (<= (count dir) (count root))) false
+          (re-find pattern dir) true
+          :else (recur (parent-dir dir)))))
+
+(defn- list-files-with-fd
+  "List files under the canonical ROOT with fd, applying the same filters
+  as fs/list-files: backup files, exclusion regexes, and containment.
+  Returns nil when fd fails so the caller falls back to the walk.
+
+  fd skips hidden entries by default (matching the walk) but honors
+  ignore files, which the walk does not, hence --no-ignore. Results are
+  canonicalized so symlinked entries pointing outside the root are
+  rejected by a prefix check. [ref:silo_path_containment]"
+  [root
+   {:keys [follow-symlinks? skip-backups? excluded-directories-regex
+           excluded-files-regex],
+    :or {follow-symlinks? true, skip-backups? true}} fd-argv]
+  (let [{:keys [exit out error]}
+          (process/run (into (vec fd-argv)
+                             (concat ["--print0" "--absolute-path" "--type" "f"
+                                      "--no-ignore"]
+                                     (when follow-symlinks? ["--follow"])
+                                     ["." root]))
+                       {})]
+    (when (and (not error) (zero? exit))
+      (let [dir-pattern (some-> excluded-directories-regex
+                                re-pattern)
+            file-pattern (some-> excluded-files-regex
+                                 re-pattern)]
+        (->> (str/split out #"\u0000")
+             (remove str/blank?)
+             (remove #(and skip-backups? (fs/backup-file? %)))
+             (remove #(and file-pattern (re-find file-pattern %)))
+             (remove #(and dir-pattern
+                           (under-excluded-dir? dir-pattern root %)))
+             (keep (fn [path]
+                     (let [real (fs/canonical path)]
+                       (when (str/starts-with? real (str root "/")) real))))
+             (distinct)
+             (sort)
+             (vec))))))
+
 (defn list-notes
   "Return note records for all valid Denote files in the context's silo,
-  filtered by FILTERS (:match :keyword :signature :title :id :query)."
+  filtered by FILTERS (:match :keyword :signature :title :id :query).
+  Files are listed with fd when available, with the directory walk in
+  fs/list-files as the fallback."
   [{:keys [silo config]} filters _opts]
   (let [root (fs/canonical (:path silo))
-        files (fs/list-files [root] (get config :files {}))
+        files-opts (get config :files {})
+        fd-argv (get-in config [:tools :fd] ["fd"])
+        files (or (when (process/available? (first fd-argv))
+                    (list-files-with-fd root files-opts fd-argv))
+                  (fs/list-files [root] files-opts))
         filters (compile-filters filters)]
     (into []
           (comp (keep #(note-record % root (:name silo) config))
