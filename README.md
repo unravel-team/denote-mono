@@ -38,15 +38,16 @@ curl -fsSL https://raw.githubusercontent.com/unravel-team/denote-mono/main/insta
   | VERSION=vX.Y.Z BINDIR=/usr/local/bin sh
 ```
 
-### Homebrew (macOS/Linux)
+### Homebrew (macOS/Linux) — future
 
-After the Homebrew tap formula is published, install with:
+A Homebrew tap is planned but not set up yet — use the install script
+above instead. Once the tap exists, installation will be:
 
 ```sh
 brew install unravel-team/tap/denote-mono
 ```
 
-The tap formula should point at the same GitHub Release archives and
+The tap formula will point at the same GitHub Release archives and
 checksums as the install script.
 
 ### Manual GitHub Releases download
