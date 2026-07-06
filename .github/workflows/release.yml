@@ -41,21 +41,19 @@ jobs:
         with:
           distribution: graalvm
           java-version: "21"
-          components: native-image
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Style checks (tagref/clj-kondo/zprint) are development gates and
+      # their binaries do not exist for every runner arch (zprint has no
+      # linux-arm64 build); the release build runs only the reflection
+      # check via the native-release target.
       - name: Set up Clojure tools
         uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: latest
-          clj-kondo: "2026.05.25"
-          zprint: "1.3.0"
-
-      - name: Install tagref
-        run: cargo install tagref --version 1.10.0 --locked
 
       - name: Build native binary
-        run: make native
+        run: make native-release
 
       - name: Package release artifact
         env:

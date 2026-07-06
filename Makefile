@@ -118,16 +118,19 @@ test: test-unit ## Run default test suite
 test-coverage:   # Run coverage reports for the code using Clofidence
 	clojure -X:dev:test:clofidence
 
-.PHONY: build
-build: check ## Build denote-cli uberjar
+.PHONY: uberjar
+uberjar: ## Build the denote-cli uberjar (no checks)
 	clojure -T:build uberjar :project denote-cli
+
+.PHONY: build
+build: check uberjar ## Build denote-cli uberjar after full checks
 
 # Path to GraalVM's native-image: PATH first, then a user-local install
 # under ~/.local/share/graalvm (macOS bundle layout).
 NATIVE_IMAGE ?= $(or $(shell command -v native-image 2>/dev/null),$(lastword $(wildcard $(HOME)/.local/share/graalvm/*/Contents/Home/bin/native-image)))
 
-.PHONY: native
-native: build ## Build a native binary with GraalVM native-image
+.PHONY: native-image
+native-image:
 	@test -n "$(NATIVE_IMAGE)" || { echo "native-image not found; install GraalVM or set NATIVE_IMAGE"; exit 1; }
 	$(NATIVE_IMAGE) -jar $$(ls -t projects/denote-cli/target/denote-cli-*-standalone.jar | head -1) \
 	  -o projects/denote-cli/target/denote \
@@ -136,6 +139,15 @@ native: build ## Build a native binary with GraalVM native-image
 	  --initialize-at-build-time=org.slf4j \
 	  --enable-url-protocols=http,https \
 	  --no-fallback
+
+.PHONY: native
+native: build native-image ## Build a native binary with GraalVM native-image
+
+# Release CI builds on runners without zprint/clj-kondo/tagref (zprint has
+# no linux-arm64 binary), so only the reflection check runs: it is the one
+# check that gates a working native binary rather than code style.
+.PHONY: native-release
+native-release: check-reflection uberjar native-image ## Native binary with reflection check only (release CI)
 	@echo "Native binary: projects/denote-cli/target/denote"
 
 .PHONY: clean
