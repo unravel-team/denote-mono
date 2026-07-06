@@ -23,10 +23,13 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - runner: macos-13
+          # macos-13 (the old Intel label) is retired and macos-14 is
+          # deprecated; macos-15-intel is GitHub's remaining free x64
+          # macOS runner.
+          - runner: macos-15-intel
             platform: macos
             arch: x64
-          - runner: macos-14
+          - runner: macos-15
             platform: macos
             arch: arm64
 
