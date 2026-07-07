@@ -1,0 +1,58 @@
+---
+name: CI
+
+'on':
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-test:
+    name: Check and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Clojure tools
+        uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: latest
+          clj-kondo: latest
+          zprint: latest
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tagref
+        run: |
+          cargo install tagref --version 1.13.0 --locked
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Check toolchain
+        run: make doctor
+
+      - name: Run checks
+        run: make check
+
+      - name: Run tests
+        run: make test
