@@ -23,12 +23,9 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          # macos-13 (the old Intel label) is retired and macos-14 is
-          # deprecated; macos-15-intel is GitHub's remaining free x64
-          # macOS runner.
-          - runner: macos-15-intel
-            platform: macos
-            arch: x64
+          # No macos x64: GraalVM stopped shipping macOS Intel builds
+          # after JDK 21 (21.0.9 was the last), so Intel Macs build from
+          # source instead.
           - runner: macos-15
             platform: macos
             arch: arm64
@@ -39,12 +36,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up GraalVM
+      # GraalVM provides native-image only (via GRAALVM_HOME); Temurin
+      # is installed after it so JAVA_HOME and PATH point at Temurin for
+      # the JVM build steps (reflection check + uberjar).
+      - name: Set up GraalVM native-image
         uses: graalvm/setup-graalvm@v1
         with:
           distribution: graalvm
-          java-version: "21"
+          java-version: "25"
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Temurin Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
 
       # Style checks (tagref/clj-kondo/zprint) are development gates and
       # their binaries do not exist for every runner arch (zprint has no
@@ -56,7 +62,7 @@ jobs:
           cli: latest
 
       - name: Build native binary
-        run: make native-release
+        run: make native-release NATIVE_IMAGE="$GRAALVM_HOME/bin/native-image"
 
       - name: Package release artifact
         env:

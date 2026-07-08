@@ -29,7 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/unravel-team/denote-mono/main/insta
 The script downloads the latest release asset matching your OS and CPU,
 verifies it against `checksums.txt` when available, and installs
 `denote` to `~/.local/bin`. Release automation publishes archives named
-`denote-mono-vX.Y.Z-{macos,linux}-{arm64,x64}.tar.gz`.
+`denote-mono-vX.Y.Z-{linux-{arm64,x64},macos-arm64}.tar.gz`. There is no
+macos-x64 archive — GraalVM stopped shipping macOS Intel builds after
+JDK 21 — so Intel Macs build from source instead.
 
 Override the version or destination like this:
 
