@@ -800,6 +800,72 @@
     (is (str/includes? (:out (run-cli "completions" "fish"))
                        "__fish_seen_subcommand_from config"))))
 
+(deftest doctor-command
+  (testing "a healthy setup is all ok, exit 0"
+    (let [{:keys [exit out]} (run-cli "doctor")]
+      (is (zero? exit))
+      (is (str/includes? out "config"))
+      (is (str/includes? out "notes"))))
+  (testing "a missing silo directory fails, and --fix creates it"
+    (let [gone (str (temp-dir "denote-cli-doctor") "/gone")
+          config-path (str (temp-dir "denote-cli-doctor-cfg") "/config.edn")]
+      (spit config-path
+            (pr-str {:default-silo :notes, :silos {:notes {:path gone}}}))
+      (let [{:keys [exit out]} (cli/run ["--config" config-path "doctor"]
+                                        *harness*)]
+        (is (= 3 exit))
+        (is (str/includes? out gone)))
+      (let [{:keys [exit out]}
+              (cli/run ["--config" config-path "doctor" "--fix"] *harness*)]
+        (is (zero? exit))
+        (is (str/includes? out gone))
+        (is (.isDirectory (java.io.File. ^String gone))))))
+  (testing "a missing external tool warns without failing"
+    (let [config-path (str (temp-dir "denote-cli-doctor-tools") "/config.edn")]
+      (spit config-path
+            (pr-str {:default-silo :notes,
+                     :silos {:notes {:path *notes-root*}},
+                     :tools {:fzf ["definitely-not-a-real-tool-xyz"]}}))
+      (let [{:keys [exit out]} (cli/run ["--config" config-path "doctor"]
+                                        *harness*)]
+        (is (zero? exit))
+        (is (str/includes? out "fzf")))))
+  (testing "no editor anywhere warns without failing"
+    (let [{:keys [exit out]} (run-cli "doctor")]
+      ;; fixture env has EDITOR=true, so no warning here
+      (is (zero? exit))
+      (is (not (str/includes? out "falls back to vi"))))
+    (let [{:keys [exit out]} (cli/run ["--config" *config-path* "doctor"]
+                                      (assoc *harness* :env {}))]
+      (is (zero? exit))
+      (is (str/includes? out "editor"))))
+  (testing "an llm-wiki silo without its API key env warns without failing"
+    (let [wiki (temp-dir "denote-cli-doctor-wiki")
+          config-path (str (temp-dir "denote-cli-doctor-llm") "/config.edn")]
+      (spit config-path
+            (pr-str {:default-silo :notes,
+                     :default-llm-wiki-silo :wiki,
+                     :silos {:notes {:path *notes-root*},
+                             :wiki {:path wiki, :llm-wiki true}}}))
+      (let [{:keys [exit out]} (cli/run ["--config" config-path "doctor"]
+                                        (assoc *harness* :env {}))]
+        (is (zero? exit))
+        (is (str/includes? out "OPENROUTER_API_KEY")))))
+  (testing "a missing config file fails and points at denote init"
+    (let [missing (str (temp-dir "denote-cli-doctor-none") "/config.edn")
+          {:keys [exit out]} (cli/run ["--config" missing "doctor"] *harness*)]
+      (is (= 3 exit))
+      (is (str/includes? out "denote init"))))
+  (testing "doctor answers --help"
+    (let [{:keys [exit out]} (run-cli "doctor" "--help")]
+      (is (zero? exit))
+      (is (str/includes? out "Usage: denote doctor"))
+      (is (str/includes? out "--fix"))))
+  (testing "silo doctor stays as the silo-only subset"
+    (let [{:keys [exit out]} (run-cli "silo" "doctor")]
+      (is (zero? exit))
+      (is (str/includes? out "OK")))))
+
 (deftest silo-commands
   (testing "silo list shows names and paths"
     (let [{:keys [exit out]} (run-cli "silo" "list")]

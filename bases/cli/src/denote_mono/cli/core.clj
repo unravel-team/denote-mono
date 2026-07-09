@@ -74,6 +74,8 @@ Commands:
   silo doctor      Check that configured silos exist
   config show      Print the effective config as EDN (--json)
   config path      Print the config file path
+  doctor           Check config, silos, tools, and editor
+                   (--fix creates missing silo directories)
   completions SH   Print a completion script for bash, zsh, or fish
   help             Show this help text.")
 
@@ -620,6 +622,12 @@ Commands:
   [[nil "--json" "JSON output (show)"]
    [nil "--config PATH" "Config file path"]])
 
+(def ^:private doctor-options
+  ;; No --silo/--root here: doctor checks the whole configuration, not
+  ;; one silo. --config picks the file to check.
+  [[nil "--fix" "Create missing silo directories"]
+   [nil "--config PATH" "Config file path"]])
+
 (def ^:private command-spec
   "Command surface used for dispatch documentation, per-command --help,
   and completion scripts."
@@ -671,6 +679,10 @@ Commands:
     :description "Configuration operations",
     :options config-options,
     :subcommands ["path" "show"]}
+   {:name "doctor",
+    :usage "doctor [OPTIONS]",
+    :description "Check config, silos, tools, and editor health",
+    :options doctor-options}
    {:name "completions",
     :usage "completions bash|zsh|fish",
     :description "Print a shell completion script",
@@ -1022,6 +1034,91 @@ Commands:
           :else {:exit (exit-codes :usage),
                  :out "Usage: denote config show|path"})))
 
+(defn- doctor-config-check
+  "Check that the config file exists, parses, and validates. Returns
+  {:lines [...] :cfg CFG}; a nil :cfg means the remaining checks cannot
+  run. A missing file is a fail pointing at 'denote init', never an
+  exception: doctor is the tool for exactly that situation."
+  [config-file env]
+  (if-not (.isFile (io/file config-file))
+    {:lines [(str "fail: config file not found at "
+                  config-file
+                  " — run 'denote init' to create one")]}
+    (try {:lines [(str "ok: config " config-file)],
+          :cfg (-> (config/load-config {:path config-file, :env env})
+                   config/validate)}
+         (catch clojure.lang.ExceptionInfo e
+           {:lines [(str "fail: config: " (ex-message e))]}))))
+
+(defn- doctor-silo-lines
+  "One line per configured silo; with FIX?, create missing directories
+  (the only silo/doctor failure mode) and report them as fixed."
+  [cfg env fix?]
+  (for [{silo-name :name, :keys [path ok? reason]} (silo/doctor cfg env)]
+    (cond ok? (str "ok: silo " (name silo-name) " " path)
+          (and fix? (.mkdirs (io/file path))) (str "ok: silo " (name silo-name)
+                                                   " — created " path)
+          :else (str "fail: silo " (name silo-name) ": " reason " " path))))
+
+(defn- doctor-tool-lines
+  "External tools are optional (graceful fallbacks exist), so a missing
+  one warns rather than fails."
+  [cfg]
+  (for [tool [:fd :rg :fzf :pdftotext]
+        :let [argv (get-in cfg [:tools tool])]
+        :when (seq argv)]
+    (if (process/available? (first argv))
+      (str "ok: tool " (name tool) " (" (first argv) ")")
+      (str "warn: tool "
+           (name tool)
+           ": "
+           (first argv)
+           " not found (optional; a built-in fallback is used)"))))
+
+(defn- doctor-editor-line
+  "Mirror editor/editor-command's sources ($VISUAL, $EDITOR, config
+  [:tools :editor]); warn when none is set and vi is the fallback."
+  [cfg env]
+  (if (or (some #(not-empty (get env %)) ["VISUAL" "EDITOR"])
+          (seq (get-in cfg [:tools :editor])))
+    (str "ok: editor " (str/join " " (editor/editor-command env cfg)))
+    (str "warn: editor: none of $VISUAL, $EDITOR, or :tools :editor"
+         " is set (falls back to vi)")))
+
+(defn- doctor-llm-lines
+  "Only checked when some silo is an LLM wiki; the key itself is only
+  needed then."
+  [cfg env]
+  (when (some :llm-wiki (vals (:silos cfg)))
+    (let [api-key-env (get-in cfg [:llm :api-key-env])]
+      [(if (not-empty (get env api-key-env))
+         (str "ok: llm api key " api-key-env " is set")
+         (str "warn: llm: environment variable "
+              api-key-env
+              " is not set (llm-wiki commands need it)"))])))
+
+(defn- handle-doctor
+  "Health-check the whole setup: config file, silo directories, external
+  tools, editor, and LLM credentials. Warns are fine (exit 0); any fail
+  exits 3."
+  [global-opts {:keys [env]} args]
+  (let [{:keys [options errors]} (tools-cli/parse-opts args doctor-options)]
+    (if errors
+      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (let [global-opts (merge-context-opts global-opts options)
+            config-file (or (:config global-opts) (config/config-path env))
+            {:keys [lines cfg]} (doctor-config-check config-file env)
+            lines (concat lines
+                          (when cfg
+                            (concat (doctor-silo-lines cfg env (:fix options))
+                                    (doctor-tool-lines cfg)
+                                    [(doctor-editor-line cfg env)]
+                                    (doctor-llm-lines cfg env))))]
+        {:exit (if (some #(str/starts-with? % "fail:") lines)
+                 (exit-codes :validation)
+                 (exit-codes :success)),
+         :out (str/join "\n" lines)}))))
+
 (defn- stderr-tty?
   "True when stderr is attached to a terminal, even with stdin/stdout
   redirected (e.g. under xargs). The JVM has no isatty, so ask the shell
@@ -1059,6 +1156,9 @@ Commands:
              (= command "init") (handle-init options harness command-args)
              (= command "silo") (handle-silo options harness command-args)
              (= command "config") (handle-config options harness command-args)
+             ;; doctor loads (and checks) the config itself, so a
+             ;; missing or broken file is a finding, not a crash.
+             (= command "doctor") (handle-doctor options harness command-args)
              (= command "find") (handle-find options harness command-args)
              (= command "rename") (handle-rename options harness command-args)
              (= command "new") (handle-new options harness command-args)

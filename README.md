@@ -195,6 +195,10 @@ silo containing the current directory, then `:default-silo`. The
 `llm-wiki` commands resolve the same way but only among silos flagged
 `:llm-wiki true`, falling back to `:default-llm-wiki-silo`.
 
+If something doesn't work, run `denote doctor`: it checks the config
+file, silo directories, external tools, editor, and LLM credentials;
+`denote doctor --fix` creates missing silo directories.
+
 ## Usage
 
 Every command accepts the global options `--silo NAME`, `--root PATH`,
