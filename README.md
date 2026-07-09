@@ -212,6 +212,9 @@ denote find --help
 denote seq --help
 ```
 
+`denote help config|silos|links|sequences` prints a short explainer on
+each topic; `denote help COMMAND` is the same as `COMMAND --help`.
+
 ### Create notes
 
 ```sh

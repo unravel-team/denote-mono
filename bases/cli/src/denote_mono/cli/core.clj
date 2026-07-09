@@ -77,7 +77,78 @@ Commands:
   doctor           Check config, silos, tools, and editor
                    (--fix creates missing silo directories)
   completions SH   Print a completion script for bash, zsh, or fish
-  help             Show this help text.")
+  help [TOPIC]     Show this text, a topic, or a command's --help
+
+Configuration:
+  Run 'denote init' for first-run setup: it writes config.edn under
+  $XDG_CONFIG_HOME/denote-mono (~/.config/denote-mono by default) and
+  creates the notes directory. 'denote config show' prints the
+  effective settings; 'denote doctor' checks the whole setup.
+
+Topic help: denote help config|silos|links|sequences")
+
+(def ^:private help-topics
+  "Static texts for `denote help TOPIC`. Command names take precedence
+  at dispatch, so topics must not shadow a command in command-spec."
+  {"config"
+   "The config file lives at $XDG_CONFIG_HOME/denote-mono/config.edn
+(~/.config/denote-mono/config.edn when XDG_CONFIG_HOME is unset).
+'denote init' writes it and creates the notes directory; every other
+knob is documented inside the file as commented-out defaults, and
+'denote config show' prints the effective config, defaults included.
+
+A minimal config names your note directories (\"silos\"):
+
+  {:default-silo :notes
+   :silos {:notes {:path \"~/Documents/notes\"}
+           :work {:path \"~/work/notes\"}}}
+
+Flag a silo with :llm-wiki true to use it with the llm-wiki commands.
+'denote config path' prints the file's location.",
+   "silos"
+   "A silo is one directory of notes; the config can name several, and
+every command operates on exactly one of them.
+
+Selection order for a command:
+  1. --silo NAME    the named silo
+  2. --root PATH    an explicit directory, configured or not
+  3. the silo containing the current working directory
+  4. :default-silo from the config
+
+llm-wiki commands resolve the same way, but only among silos flagged
+:llm-wiki true, falling back to :default-llm-wiki-silo.
+
+  denote silo list          name and path of every silo
+  denote silo path [NAME]   print one path (default silo if omitted)
+  denote silo doctor        check that the directories exist",
+   "links"
+   "Notes link to each other by identifier:
+
+  [[denote:ID][text]]   org
+  [text](denote:ID)     markdown
+
+  denote links FILE_OR_ID       outgoing links of a note
+  denote backlinks FILE_OR_ID   notes pointing at it
+
+Renaming a note's identifier refuses to break existing backlinks
+unless you pass --break-links (the guard applies only inside a
+configured silo).",
+   "sequences"
+   "Sequence signatures (1, 1=1, 1=2=1, ...) order notes into a
+Folgezettel tree: children refine their parents.
+
+  denote seq new parent --title \"Project X\"      => 1
+  denote seq new child 1 --title \"Design\"        => 1=1
+  denote seq new sibling 1=1 --title \"Planning\"  => 1=2
+  denote seq next child 1        print the next free slot
+  denote seq list [SEQ]          flat listing (--depth N)
+  denote seq tree [SEQ]          indented tree (--depth N)
+  denote seq reparent FILE SEQ   move a subtree (--recursive)
+  denote seq convert FILE... --to SCHEME
+  denote seq as-parent FILE      give a note a new top-level sequence
+
+Schemes: numeric (default), alphanumeric, alphanumeric-delimited.
+Batch mutations print their plan and require --yes."})
 
 (def ^:private context-options
   "Silo/root/config selection, accepted both before and after the
@@ -688,7 +759,11 @@ Commands:
     :description "Print a shell completion script",
     :options [],
     :subcommands ["bash" "fish" "zsh"]}
-   {:name "help", :usage "help", :description "Show help", :options []}])
+   {:name "help",
+    :usage "help [TOPIC]",
+    :description "Show help for a topic or command",
+    :options [],
+    :subcommands ["config" "links" "sequences" "silos"]}])
 
 (defn- command-help
   "Per-command help text rendered from command-spec, or nil for an
@@ -706,6 +781,23 @@ Commands:
          (when (seq options)
            (str "\n\nOptions:\n"
                 (:summary (tools-cli/parse-opts [] options)))))))
+
+(defn- handle-help
+  "`denote help` prints the top-level help; `denote help TOPIC` a topic
+  text; `denote help COMMAND` the same text as `COMMAND --help`."
+  [args]
+  (let [topic (first args)]
+    (cond (nil? topic) {:exit (exit-codes :success), :out help-text}
+          (help-topics topic) {:exit (exit-codes :success),
+                               :out (help-topics topic)}
+          (command-help topic) {:exit (exit-codes :success),
+                                :out (command-help topic)}
+          :else {:exit (exit-codes :usage),
+                 :out (str "Unknown help topic: " topic
+                           "\nTopics: " (str/join ", "
+                                                  (sort (keys help-topics)))
+                           "\nCommands: "
+                             (str/join ", " (map :name command-spec)))})))
 
 (defn- handle-completions
   [args]
@@ -1147,10 +1239,11 @@ Commands:
        (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
              (or (:version options) (= "version" command))
                {:exit (exit-codes :success), :out (version-string)}
-             (or (nil? command) (:help options) (= "help" command))
-               {:exit (exit-codes :success), :out help-text}
+             (or (nil? command) (:help options)) {:exit (exit-codes :success),
+                                                  :out help-text}
              (and (some #{"--help" "-h"} command-args) (command-help command))
                {:exit (exit-codes :success), :out (command-help command)}
+             (= command "help") (handle-help command-args)
              ;; init must run before any config load: it exists to create
              ;; the config, so a missing or broken file cannot block it.
              (= command "init") (handle-init options harness command-args)

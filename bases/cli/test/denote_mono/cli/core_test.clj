@@ -76,6 +76,39 @@
   (testing "unknown commands still fail even with --help"
     (is (= 2 (:exit (run-cli "frobnicate" "--help"))))))
 
+(deftest help-topics
+  (testing "top-level help points at the configuration entry points"
+    (let [{:keys [out]} (cli/run ["help"] *harness*)]
+      (is (str/includes? out "denote init"))
+      (is (str/includes? out "config.edn"))))
+  (testing "help config explains the config file"
+    (let [{:keys [exit out]} (run-cli "help" "config")]
+      (is (zero? exit))
+      (is (str/includes? out "config.edn"))
+      (is (str/includes? out "silo"))))
+  (testing "help silos explains silo selection"
+    (let [{:keys [exit out]} (run-cli "help" "silos")]
+      (is (zero? exit))
+      (is (str/includes? out "--silo"))
+      (is (str/includes? out "default-silo"))))
+  (testing "help links explains the link syntax"
+    (let [{:keys [exit out]} (run-cli "help" "links")]
+      (is (zero? exit))
+      (is (str/includes? out "denote:"))
+      (is (str/includes? out "backlinks"))))
+  (testing "help sequences explains Folgezettel signatures"
+    (let [{:keys [exit out]} (run-cli "help" "sequences")]
+      (is (zero? exit))
+      (is (str/includes? out "signature"))))
+  (testing "help COMMAND matches COMMAND --help"
+    (is (= (:out (run-cli "find" "--help")) (:out (run-cli "help" "find")))))
+  (testing "an unknown help topic is a usage error"
+    (let [{:keys [exit out]} (run-cli "help" "frobnicate")]
+      (is (= 2 exit))
+      (is (str/includes? out "frobnicate"))))
+  (testing "completions offer the help topics"
+    (is (str/includes? (:out (run-cli "completions" "bash")) "sequences"))))
+
 (deftest run-unknown-command
   (testing "unknown command exits with usage code 2"
     (let [{:keys [exit out]} (run-cli "frobnicate")]
