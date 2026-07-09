@@ -43,6 +43,8 @@ Global options:
 the value given after the command wins.
 
 Commands:
+  init             Create a first-run config and notes directory
+                   (--path --name --llm-wiki-path --print --force)
   find [QUERY]     Find notes (filters: --match --keyword --signature
                    --title --id; output: --sort --json --edn --print0).
                    On a terminal fzf selects interactively: Enter opens
@@ -132,6 +134,81 @@ Commands:
      [nil "--dry-run" "Print the planned path without creating"]
      [nil "--reuse-empty" "Reuse an existing empty file"]]
     context-options))
+
+(def ^:private init-options
+  ;; No --silo/--root here: init creates the config those flags select
+  ;; against. --config picks where the file is written.
+  [[nil "--path DIR" "Notes directory for the first silo"]
+   [nil "--name NAME" "Silo name" :default "notes"]
+   [nil "--llm-wiki-path DIR" "Also configure an LLM wiki silo at DIR"]
+   [nil "--print" "Print the config text instead of writing it"]
+   [nil "--force" "Overwrite an existing config file"]
+   [nil "--config PATH" "Config file path"]])
+
+(defn- prompt-line
+  "Prompt on stderr (stdout stays clean for command output) and read one
+  line from stdin; blank input or EOF takes DEFAULT."
+  [message default]
+  (binding [*out* *err*]
+    (print (str message (when default (str " [" default "]")) ": "))
+    (flush))
+  (let [line (read-line)] (if (str/blank? line) default line)))
+
+(defn- prompt-init-options
+  "Fill in missing init options interactively. Only called on a terminal;
+  non-tty runs must pass --path instead."
+  [options]
+  (let [path (prompt-line "Notes directory" "~/Documents/notes")
+        silo-name (prompt-line "Silo name" (:name options))
+        wiki? (= "y"
+                 (some-> (prompt-line "Set up an LLM wiki silo? (y/n)" "n")
+                         str/lower-case))
+        wiki-path (if wiki?
+                    (prompt-line "LLM wiki directory" "~/Documents/llm-wiki")
+                    (:llm-wiki-path options))]
+    (assoc options
+      :path path
+      :name silo-name
+      :llm-wiki-path wiki-path)))
+
+(defn- init-config
+  "Run the init plan: print it, refuse to clobber without --force, or
+  apply it."
+  [plan options]
+  (cond (:print options) {:exit (exit-codes :success), :out (:config-text plan)}
+        (and (.isFile (io/file (:config-path plan))) (not (:force options)))
+          {:exit (exit-codes :validation),
+           :out (str "Config already exists at "
+                     (:config-path plan)
+                     "; pass --force to overwrite")}
+        :else (do (config/init-apply! plan)
+                  {:exit (exit-codes :success),
+                   :out (str "Wrote " (:config-path plan)
+                             "\nCreated " (str/join ", " (:dirs plan)))})))
+
+(defn- handle-init
+  "First-run setup. Runs before config loading on purpose: it must work
+  with no config file and with a broken one."
+  [global-opts harness args]
+  (let [{:keys [options errors]} (tools-cli/parse-opts args init-options)]
+    (if errors
+      {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (let [options (if (and (nil? (:path options)) (:tty? harness))
+                      (prompt-init-options options)
+                      options)]
+        (if (nil? (:path options))
+          {:exit (exit-codes :usage),
+           :out (str "Usage: denote init --path DIR [--name NAME]"
+                     " [--llm-wiki-path DIR] [--print] [--force]")}
+          (init-config (config/init-plan
+                         {:config-path (or (:config options)
+                                           (:config global-opts)
+                                           (config/config-path (:env harness))),
+                          :silo-name (:name options),
+                          :silo-path (:path options),
+                          :llm-wiki-path (:llm-wiki-path options),
+                          :env (:env harness)})
+                       options))))))
 
 (defn- load-validated-config
   [global-opts env]
@@ -537,7 +614,11 @@ Commands:
 (def ^:private command-spec
   "Command surface used for dispatch documentation, per-command --help,
   and completion scripts."
-  [{:name "find",
+  [{:name "init",
+    :usage "init [OPTIONS]",
+    :description "Create a first-run config and notes directory",
+    :options init-options}
+   {:name "find",
     :usage "find [QUERY] [OPTIONS]",
     :description "Find notes",
     :options find-options}
@@ -934,6 +1015,9 @@ Commands:
                {:exit (exit-codes :success), :out help-text}
              (and (some #{"--help" "-h"} command-args) (command-help command))
                {:exit (exit-codes :success), :out (command-help command)}
+             ;; init must run before any config load: it exists to create
+             ;; the config, so a missing or broken file cannot block it.
+             (= command "init") (handle-init options harness command-args)
              (= command "silo") (handle-silo options harness command-args)
              (= command "find") (handle-find options harness command-args)
              (= command "rename") (handle-rename options harness command-args)

@@ -625,6 +625,99 @@
           out
           "complete -c denote -n '__fish_seen_subcommand_from find' -l silo")))))
 
+(deftest init-command
+  (let [fresh-config (fn [] (str (temp-dir "denote-cli-init") "/config.edn"))
+        notes-dir (fn [] (str (temp-dir "denote-cli-init-notes") "/notes"))]
+    (testing "init writes a config and creates the notes directory"
+      (let [config-path (fresh-config)
+            dir (notes-dir)
+            {:keys [exit out]} (cli/run ["init" "--config" config-path "--path"
+                                         dir "--name" "notes"]
+                                        *harness*)]
+        (is (zero? exit))
+        (is (str/includes? out config-path))
+        (is (.isFile (java.io.File. ^String config-path)))
+        (is (.isDirectory (java.io.File. ^String dir)))
+        (let [written (edn/read-string (slurp config-path))]
+          (is (= :notes (:default-silo written)))
+          (is (= dir (get-in written [:silos :notes :path]))))
+        (testing "the written config is immediately usable"
+          (let [{:keys [exit out]} (cli/run ["--config" config-path "find"]
+                                            *harness*)]
+            (is (= 6 exit))
+            (is (str/includes? out "No matching notes"))))))
+    (testing "the config file documents the defaults as comments"
+      (let [config-path (fresh-config)]
+        (cli/run ["init" "--config" config-path "--path" (notes-dir) "--name"
+                  "notes"]
+                 *harness*)
+        (let [text (slurp config-path)]
+          (is (str/includes? text ";;"))
+          (is (str/includes? text ":llm"))
+          (is (str/includes? text ":file-type")))))
+    (testing "init refuses to overwrite an existing config"
+      (let [config-path (fresh-config)]
+        (spit config-path "{}")
+        (let [{:keys [exit out]} (cli/run ["init" "--config" config-path
+                                           "--path" (notes-dir) "--name"
+                                           "notes"]
+                                          *harness*)]
+          (is (= 3 exit))
+          (is (str/includes? out "--force"))
+          (is (= "{}" (slurp config-path))))))
+    (testing "--force overwrites"
+      (let [config-path (fresh-config)
+            dir (notes-dir)]
+        (spit config-path "{}")
+        (let [{:keys [exit]} (cli/run ["init" "--config" config-path "--path"
+                                       dir "--name" "notes" "--force"]
+                                      *harness*)]
+          (is (zero? exit))
+          (is (= :notes
+                 (:default-silo (edn/read-string (slurp config-path))))))))
+    (testing "--print emits the config text without writing anything"
+      (let [config-path (fresh-config)
+            dir (notes-dir)
+            {:keys [exit out]} (cli/run ["init" "--config" config-path "--path"
+                                         dir "--name" "notes" "--print"]
+                                        *harness*)]
+        (is (zero? exit))
+        (is (= :notes (:default-silo (edn/read-string out))))
+        (is (not (.exists (java.io.File. ^String config-path))))
+        (is (not (.exists (java.io.File. ^String dir))))))
+    (testing "--llm-wiki-path adds a flagged wiki silo and default"
+      (let [config-path (fresh-config)
+            wiki-dir (str (temp-dir "denote-cli-init-wiki") "/wiki")
+            {:keys [exit]} (cli/run ["init" "--config" config-path "--path"
+                                     (notes-dir) "--name" "notes"
+                                     "--llm-wiki-path" wiki-dir]
+                                    *harness*)]
+        (is (zero? exit))
+        (is (.isDirectory (java.io.File. ^String wiki-dir)))
+        (let [written (edn/read-string (slurp config-path))]
+          (is (true? (get-in written [:silos :wiki :llm-wiki])))
+          (is (= wiki-dir (get-in written [:silos :wiki :path])))
+          (is (= :wiki (:default-llm-wiki-silo written))))))
+    (testing "without --path and without a terminal init explains itself"
+      (let [{:keys [exit out]} (cli/run ["init" "--config" (fresh-config)]
+                                        *harness*)]
+        (is (= 2 exit))
+        (is (str/includes? out "--path"))))
+    (testing "the default config location comes from XDG_CONFIG_HOME"
+      (let [xdg (temp-dir "denote-cli-init-xdg")
+            {:keys [exit]} (cli/run
+                             ["init" "--path" (notes-dir) "--name" "notes"]
+                             (assoc *harness* :env {"XDG_CONFIG_HOME" xdg}))]
+        (is (zero? exit))
+        (is (.isFile (java.io.File. (str xdg "/denote-mono/config.edn"))))))
+    (testing "init answers --help"
+      (let [{:keys [exit out]} (cli/run ["init" "--help"] *harness*)]
+        (is (zero? exit))
+        (is (str/includes? out "Usage: denote init"))
+        (is (str/includes? out "--print"))))
+    (testing "completions know about init"
+      (is (str/includes? (:out (run-cli "completions" "bash")) "init")))))
+
 (deftest silo-commands
   (testing "silo list shows names and paths"
     (let [{:keys [exit out]} (run-cli "silo" "list")]

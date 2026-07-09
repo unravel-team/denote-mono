@@ -64,6 +64,54 @@
   [config cli-opts]
   (deep-merge config cli-opts))
 
+(defn- render-config-text
+  "Annotated config.edn body: the ACTIVE map as real EDN followed by every
+  default as a commented-out EDN line, so all knobs are discoverable by
+  opening the file. edn/read-string of the whole text yields ACTIVE."
+  [active]
+  (str ";; denote-mono configuration (EDN).\n"
+       ";; Copy a commented default below into this map (dropping the"
+       " \";;\")\n"
+       ";; and edit it to override.\n"
+       "{"
+       (str/join ",\n " (for [[k v] active] (str (pr-str k) " " (pr-str v))))
+       "}\n\n;; Defaults:\n"
+       (str/join "\n"
+                 (for [[k v] (dissoc default-config
+                               :default-silo
+                               :default-llm-wiki-silo
+                               :silos)]
+                   (str ";; " (pr-str k) " " (pr-str v))))
+       "\n"))
+
+(defn init-plan
+  "Pure plan for first-run initialization (ADR 6: plan-then-apply).
+  Takes {:config-path :silo-name :silo-path :llm-wiki-path :env} and
+  returns {:config-path :config-text :dirs}. Silo paths are stored in the
+  config text exactly as given; :dirs carries them home-expanded so apply
+  can create them."
+  [{:keys [silo-name silo-path llm-wiki-path env], path :config-path}]
+  (let [silo-key (keyword silo-name)
+        active
+          (cond-> {:default-silo silo-key, :silos {silo-key {:path silo-path}}}
+            llm-wiki-path (-> (assoc-in [:silos :wiki]
+                                        {:path llm-wiki-path, :llm-wiki true})
+                              (assoc :default-llm-wiki-silo :wiki)))]
+    {:config-path (or path (config-path env)),
+     :config-text (render-config-text active),
+     :dirs (mapv #(expand-home % env)
+             (cond-> [silo-path] llm-wiki-path (conj llm-wiki-path)))}))
+
+(defn init-apply!
+  "Apply an init PLAN: create the silo directories (mkdir -p semantics)
+  and write the config file, creating its parent directories. Returns the
+  plan."
+  [{:keys [config-path config-text dirs], :as plan}]
+  (doseq [dir dirs] (.mkdirs (io/file dir)))
+  (io/make-parents config-path)
+  (spit config-path config-text)
+  plan)
+
 (defn validate
   "Validate CONFIG, returning it unchanged or throwing ex-info with
   {:type :validation}."

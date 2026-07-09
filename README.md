@@ -144,8 +144,20 @@ denote completions fish > ~/.config/fish/completions/denote.fish
 
 ## Configuration
 
-Create `$XDG_CONFIG_HOME/denote-mono/config.edn` (defaults to
-`~/.config/denote-mono/config.edn`). A minimal config names your note
+The fastest way to a working setup is `denote init`: it writes
+`$XDG_CONFIG_HOME/denote-mono/config.edn` (defaults to
+`~/.config/denote-mono/config.edn`), creates your notes directory, and
+documents every other setting as commented-out defaults inside the file.
+On a terminal it prompts for the details; in scripts pass them as flags:
+
+```sh
+denote init --path ~/Documents/notes --name notes
+denote init --path ~/Documents/notes --llm-wiki-path ~/Documents/llm-wiki
+denote init --path ~/Documents/notes --print   # preview without writing
+denote init --path ~/Documents/notes --force   # overwrite an existing config
+```
+
+Or write the file yourself. A minimal config names your note
 directories ("silos"):
 
 ```clojure
