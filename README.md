@@ -185,8 +185,10 @@ silo containing the current directory, then `:default-silo`. The
 ## Usage
 
 Every command accepts the global options `--silo NAME`, `--root PATH`,
-and `--config PATH`, and answers `--help` with its own usage and option
-list:
+and `--config PATH` — before or after the command name, so
+`denote find --silo work` and `denote --silo work find` are equivalent
+(the value after the command wins when both are given) — and answers
+`--help` with its own usage and option list:
 
 ```sh
 denote find --help

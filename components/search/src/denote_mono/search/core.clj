@@ -135,8 +135,11 @@
 (defn- grep-with-rg
   [notes query rg-argv]
   (let [{:keys [exit out error]}
+          ;; --with-filename: with a single file rg would omit the path
+          ;; prefix, breaking the path:line:text parse below.
           (process/run (into (vec rg-argv)
-                             (concat ["--line-number" "--no-heading" "--" query]
+                             (concat ["--line-number" "--no-heading"
+                                      "--with-filename" "--" query]
                                      (map :path notes)))
                        {})]
     (when (and (not error) (#{0 1} exit))

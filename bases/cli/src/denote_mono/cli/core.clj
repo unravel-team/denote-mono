@@ -39,6 +39,9 @@ Global options:
   --config PATH    Use a specific config file
   --version        Print version and exit
 
+--silo, --root, and --config are accepted before or after the command;
+the value given after the command wins.
+
 Commands:
   find [QUERY]     Find notes (filters: --match --keyword --signature
                    --title --id; output: --sort --json --edn --print0).
@@ -69,10 +72,18 @@ Commands:
   completions SH   Print a completion script for bash, zsh, or fish
   help             Show this help text.")
 
-(def ^:private global-options
+(def ^:private context-options
+  "Silo/root/config selection, accepted both before and after the
+  command. Appended to every context-using command's option table so the
+  subcommand position parses (and shows up in its --help); the
+  subcommand-position value wins over the global one."
   [[nil "--silo NAME" "Silo name"] [nil "--root PATH" "Explicit root directory"]
-   [nil "--config PATH" "Config file path"]
-   [nil "--version" "Print version and exit"] ["-h" "--help" "Show help"]])
+   [nil "--config PATH" "Config file path"]])
+
+(def ^:private global-options
+  (into context-options
+        [[nil "--version" "Print version and exit"]
+         ["-h" "--help" "Show help"]]))
 
 (defn- version-string
   "Version embedded at build time (see build.clj); \"dev\" when running
@@ -85,37 +96,42 @@ Commands:
            "dev")))
 
 (def ^:private find-options
-  [[nil "--match REGEX" "Filter by basename regex"]
-   [nil "--keyword KW" "Filter by keyword"]
-   [nil "--signature SIG" "Filter by exact signature"]
-   [nil "--title REGEX" "Filter by title regex"]
-   [nil "--id ID" "Filter by identifier"]
-   [nil "--sort KEY" "Sort key" :default "identifier"]
-   [nil "--json" "JSON-lines output"] [nil "--edn" "EDN output"]
-   [nil "--print0" "NUL-delimited output"]])
+  (into [[nil "--match REGEX" "Filter by basename regex"]
+         [nil "--keyword KW" "Filter by keyword"]
+         [nil "--signature SIG" "Filter by exact signature"]
+         [nil "--title REGEX" "Filter by title regex"]
+         [nil "--id ID" "Filter by identifier"]
+         [nil "--sort KEY" "Sort key" :default "identifier"]
+         [nil "--json" "JSON-lines output"] [nil "--edn" "EDN output"]
+         [nil "--print0" "NUL-delimited output"]]
+        context-options))
 
 (def ^:private rename-options
-  [[nil "--title TITLE" "New title; empty string removes"]
-   [nil "--keyword KW" "Keyword (repeatable); a single empty removes all"
-    :assoc-fn (fn [m k v] (update m k (fnil conj []) v))]
-   [nil "--signature SIG" "New signature; empty string removes"]
-   [nil "--id ID" "New identifier"]
-   [nil "--date DATE" "Date for generated identifier and front matter"]
-   [nil "--front-matter MODE" "sync, update-existing, add, or none" :parse-fn
-    keyword] [nil "--dry-run" "Print the plan without applying it"]
-   [nil "--break-links" "Allow identifier changes that break backlinks"]
-   [nil "--yes" "Apply without confirmation"]])
+  (into [[nil "--title TITLE" "New title; empty string removes"]
+         [nil "--keyword KW" "Keyword (repeatable); a single empty removes all"
+          :assoc-fn (fn [m k v] (update m k (fnil conj []) v))]
+         [nil "--signature SIG" "New signature; empty string removes"]
+         [nil "--id ID" "New identifier"]
+         [nil "--date DATE" "Date for generated identifier and front matter"]
+         [nil "--front-matter MODE" "sync, update-existing, add, or none"
+          :parse-fn keyword]
+         [nil "--dry-run" "Print the plan without applying it"]
+         [nil "--break-links" "Allow identifier changes that break backlinks"]
+         [nil "--yes" "Apply without confirmation"]]
+        context-options))
 
 (def ^:private new-options
-  [[nil "--title TITLE" "Note title"]
-   [nil "--keyword KW" "Keyword (repeatable)" :assoc-fn
-    (fn [m k v] (update m k (fnil conj []) v))]
-   [nil "--signature SIG" "Signature"] [nil "--id ID" "Explicit identifier"]
-   [nil "--date DATE" "Creation date, e.g. \"2024-12-09 10:55:50\""]
-   [nil "--type TYPE" "org, markdown-yaml, markdown-toml, or text" :parse-fn
-    keyword] [nil "--subdir PATH" "Subdirectory inside the silo"]
-   [nil "--dry-run" "Print the planned path without creating"]
-   [nil "--reuse-empty" "Reuse an existing empty file"]])
+  (into
+    [[nil "--title TITLE" "Note title"]
+     [nil "--keyword KW" "Keyword (repeatable)" :assoc-fn
+      (fn [m k v] (update m k (fnil conj []) v))]
+     [nil "--signature SIG" "Signature"] [nil "--id ID" "Explicit identifier"]
+     [nil "--date DATE" "Creation date, e.g. \"2024-12-09 10:55:50\""]
+     [nil "--type TYPE" "org, markdown-yaml, markdown-toml, or text" :parse-fn
+      keyword] [nil "--subdir PATH" "Subdirectory inside the silo"]
+     [nil "--dry-run" "Print the planned path without creating"]
+     [nil "--reuse-empty" "Reuse an existing empty file"]]
+    context-options))
 
 (defn- load-validated-config
   [global-opts env]
@@ -131,6 +147,12 @@ Commands:
      :env env,
      :cwd cwd,
      :tty? tty?}))
+
+(defn- merge-context-opts
+  "Overlay the subcommand-position --silo/--root/--config onto the
+  global-position ones; the subcommand position wins."
+  [global-opts options]
+  (merge global-opts (select-keys options [:silo :root :config])))
 
 (defn- note-for-wire
   "Shape a note record for JSON/EDN output: absolute path plus
@@ -242,12 +264,15 @@ Commands:
                                                     chosen-notes)))))))))
 
 (defn- handle-find
-  [context args]
+  [global-opts harness args]
   (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
                                                                  find-options)]
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (find-notes context options (first arguments)))))
+      (find-notes (make-context (merge-context-opts global-opts options)
+                                harness)
+                  options
+                  (first arguments)))))
 
 (defn- resolve-note-path
   "Resolve FILE-OR-ID to a note path: an identifier looks the note up in
@@ -259,59 +284,83 @@ Commands:
                         {:type :no-match})))
     file-or-id))
 
+(defn- grep-notes
+  [context query]
+  (let [matches (search/grep context query {})
+        lines (mapv #(str (:relative-path %) ":" (:line-number %) ":" (:line %))
+                matches)]
+    (cond (empty? matches) {:exit (exit-codes :no-match), :out "No matches"}
+          (not (interactive-output? context nil)) {:exit (exit-codes :success),
+                                                   :out (str/join "\n" lines)}
+          :else (let [result (run-selector context lines)]
+                  (case result
+                    :unavailable {:exit (exit-codes :success),
+                                  :out (str/join "\n" lines)}
+                    :cancelled {:exit (exit-codes :no-match),
+                                :out "Selection cancelled"}
+                    (let [{:keys [action chosen]} result
+                          by-line (zipmap lines matches)]
+                      (cond (empty? chosen) {:exit (exit-codes :no-match),
+                                             :out "No matches"}
+                            (= action :print) {:exit (exit-codes :success),
+                                               :out (str/join "\n" chosen)}
+                            :else (open-in-editor context
+                                                  (distinct
+                                                    (keep (comp :path by-line)
+                                                          chosen))))))))))
+
 (defn- handle-grep
-  [context args]
-  (if-let [query (first args)]
-    (let [matches (search/grep context query {})
-          lines
-            (mapv #(str (:relative-path %) ":" (:line-number %) ":" (:line %))
-              matches)]
-      (cond (empty? matches) {:exit (exit-codes :no-match), :out "No matches"}
-            (not (interactive-output? context nil))
-              {:exit (exit-codes :success), :out (str/join "\n" lines)}
-            :else (let [result (run-selector context lines)]
-                    (case result
-                      :unavailable {:exit (exit-codes :success),
-                                    :out (str/join "\n" lines)}
-                      :cancelled {:exit (exit-codes :no-match),
-                                  :out "Selection cancelled"}
-                      (let [{:keys [action chosen]} result
-                            by-line (zipmap lines matches)]
-                        (cond (empty? chosen) {:exit (exit-codes :no-match),
-                                               :out "No matches"}
-                              (= action :print) {:exit (exit-codes :success),
-                                                 :out (str/join "\n" chosen)}
-                              :else (open-in-editor context
-                                                    (distinct
-                                                      (keep (comp :path by-line)
-                                                            chosen)))))))))
-    {:exit (exit-codes :usage), :out "Usage: denote grep QUERY"}))
+  [global-opts harness args]
+  (let [{:keys [options arguments errors]}
+          (tools-cli/parse-opts args context-options)
+        query (first arguments)]
+    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+          (nil? query) {:exit (exit-codes :usage),
+                        :out "Usage: denote grep QUERY"}
+          :else (grep-notes (make-context (merge-context-opts global-opts
+                                                              options)
+                                          harness)
+                            query))))
 
 (defn- handle-backlinks
-  [context args]
-  (if-let [file-or-id (first args)]
-    (let [id (if (filename/date-identifier? file-or-id)
-               file-or-id
-               (or (filename/extract file-or-id :identifier)
-                   (throw (ex-info (str file-or-id " has no identifier")
-                                   {:type :validation}))))
-          notes (search/backlinks context id {})]
-      (if (seq notes)
-        {:exit (exit-codes :success),
-         :out (str/join "\n" (map :relative-path notes))}
-        {:exit (exit-codes :no-match), :out "No backlinks"}))
-    {:exit (exit-codes :usage), :out "Usage: denote backlinks FILE_OR_ID"}))
+  [global-opts harness args]
+  (let [{:keys [options arguments errors]}
+          (tools-cli/parse-opts args context-options)
+        file-or-id (first arguments)]
+    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+          (nil? file-or-id) {:exit (exit-codes :usage),
+                             :out "Usage: denote backlinks FILE_OR_ID"}
+          :else
+            (let [context (make-context (merge-context-opts global-opts options)
+                                        harness)
+                  id (if (filename/date-identifier? file-or-id)
+                       file-or-id
+                       (or (filename/extract file-or-id :identifier)
+                           (throw (ex-info (str file-or-id " has no identifier")
+                                           {:type :validation}))))
+                  notes (search/backlinks context id {})]
+              (if (seq notes)
+                {:exit (exit-codes :success),
+                 :out (str/join "\n" (map :relative-path notes))}
+                {:exit (exit-codes :no-match), :out "No backlinks"})))))
 
 (defn- handle-links
-  [context args]
-  (if-let [file-or-id (first args)]
-    (let [path (resolve-note-path context file-or-id)
-          {:keys [notes identifiers]} (search/links context path {})]
-      (if (seq identifiers)
-        {:exit (exit-codes :success),
-         :out (str/join "\n" (map :relative-path notes))}
-        {:exit (exit-codes :no-match), :out "No links"}))
-    {:exit (exit-codes :usage), :out "Usage: denote links FILE_OR_ID"}))
+  [global-opts harness args]
+  (let [{:keys [options arguments errors]}
+          (tools-cli/parse-opts args context-options)
+        file-or-id (first arguments)]
+    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+          (nil? file-or-id) {:exit (exit-codes :usage),
+                             :out "Usage: denote links FILE_OR_ID"}
+          :else
+            (let [context (make-context (merge-context-opts global-opts options)
+                                        harness)
+                  path (resolve-note-path context file-or-id)
+                  {:keys [notes identifiers]} (search/links context path {})]
+              (if (seq identifiers)
+                {:exit (exit-codes :success),
+                 :out (str/join "\n" (map :relative-path notes))}
+                {:exit (exit-codes :no-match), :out "No links"})))))
 
 (defn- options->changes
   "Build the rename changes map from provided CLI options only: omitted
@@ -385,25 +434,26 @@ Commands:
   (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
                                                                  rename-options)
         file (first arguments)]
-    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-          (nil? file) {:exit (exit-codes :usage),
-                       :out "Usage: denote rename FILE [OPTIONS]"}
-          :else (let [context (rename-context global-opts harness file)
-                      plan (rename/plan-rename file
-                                               (options->changes options)
-                                               context
-                                               {:front-matter (:front-matter
-                                                                options)})]
-                  (if (:dry-run options)
-                    {:exit (exit-codes :success), :out (render-plan plan)}
-                    (do (guard-broken-links! context [plan] options)
-                        (let [applied (rename/apply-plan
-                                        (rename/validate-plan plan {})
-                                        {})]
-                          {:exit (exit-codes :success),
-                           :out (str (:source applied)
-                                     " -> "
-                                     (:destination applied))})))))))
+    (cond
+      errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+      (nil? file) {:exit (exit-codes :usage),
+                   :out "Usage: denote rename FILE [OPTIONS]"}
+      :else
+        (let [context (rename-context (merge-context-opts global-opts options)
+                                      harness
+                                      file)
+              plan (rename/plan-rename file
+                                       (options->changes options)
+                                       context
+                                       {:front-matter (:front-matter options)})]
+          (if (:dry-run options)
+            {:exit (exit-codes :success), :out (render-plan plan)}
+            (do (guard-broken-links! context [plan] options)
+                (let [applied (rename/apply-plan (rename/validate-plan plan {})
+                                                 {})]
+                  {:exit (exit-codes :success),
+                   :out
+                   (str (:source applied) " -> " (:destination applied))})))))))
 
 (defn- new-changes-from-options
   [options]
@@ -417,11 +467,13 @@ Commands:
     (:subdir options) (assoc :subdir (:subdir options))))
 
 (defn- handle-new
-  [context args]
+  [global-opts harness args]
   (let [{:keys [options errors]} (tools-cli/parse-opts args new-options)]
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (let [plan (note/plan-new (new-changes-from-options options) context {})]
+      (let [context (make-context (merge-context-opts global-opts options)
+                                  harness)
+            plan (note/plan-new (new-changes-from-options options) context {})]
         (if (:dry-run options)
           {:exit (exit-codes :success), :out (:path plan)}
           (let [created (note/create plan
@@ -474,12 +526,13 @@ Commands:
         [nil "--yes" "Apply without confirmation"]))
 
 (def ^:private llm-wiki-options
-  [[nil "--save" "File the answer back as a wiki note (query)"]
-   [nil "--deep" "Add an LLM review pass (lint)"]
-   [nil "--fix" "Repair what can be repaired (lint)"]
-   [nil "--fresh" "Ignore previous ingests of the same source (ingest)"]
-   [nil "--model MODEL" "Override the configured LLM model"]
-   [nil "--max-rounds N" "Cap agentic tool rounds" :parse-fn parse-long]])
+  (into [[nil "--save" "File the answer back as a wiki note (query)"]
+         [nil "--deep" "Add an LLM review pass (lint)"]
+         [nil "--fix" "Repair what can be repaired (lint)"]
+         [nil "--fresh" "Ignore previous ingests of the same source (ingest)"]
+         [nil "--model MODEL" "Override the configured LLM model"]
+         [nil "--max-rounds N" "Cap agentic tool rounds" :parse-fn parse-long]]
+        context-options))
 
 (def ^:private command-spec
   "Command surface used for dispatch documentation, per-command --help,
@@ -489,17 +542,17 @@ Commands:
     :description "Find notes",
     :options find-options}
    {:name "grep",
-    :usage "grep QUERY",
+    :usage "grep QUERY [OPTIONS]",
     :description "Search note contents",
-    :options []}
+    :options context-options}
    {:name "backlinks",
-    :usage "backlinks FILE_OR_ID",
+    :usage "backlinks FILE_OR_ID [OPTIONS]",
     :description "Notes linking to the given note",
-    :options []}
+    :options context-options}
    {:name "links",
-    :usage "links FILE_OR_ID",
+    :usage "links FILE_OR_ID [OPTIONS]",
     :description "Outgoing links of a note",
-    :options []}
+    :options context-options}
    {:name "rename",
     :usage "rename FILE [OPTIONS]",
     :description "Rename one file",
@@ -563,119 +616,125 @@ Commands:
     (:depth options) (filter #(<= (sequence/depth %) (:depth options)))))
 
 (defn- handle-seq
-  [context args]
+  [global-opts harness args]
   (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
                                                                  seq-options)
-        [subcommand & rest-args] arguments
-        scheme (scheme-from context options)]
+        [subcommand & rest-args] arguments]
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (case subcommand
-        "next"
-          (let [[relation target] rest-args
-                {:keys [sequences]} (silo-sequences context)
-                result (next-for-relation sequences relation target scheme)]
-            (if result
-              {:exit (exit-codes :success), :out result}
-              {:exit (exit-codes :usage),
-               :out "Usage: denote seq next parent|child SEQ|sibling SEQ"}))
-        "new" (let [[relation target] rest-args
-                    {:keys [sequences]} (silo-sequences context)
-                    signature
-                      (next-for-relation sequences relation target scheme)]
-                (if signature
-                  (let [changes (assoc (new-changes-from-options options)
-                                  :signature signature)
-                        plan (note/plan-new changes context {})]
-                    (if (:dry-run options)
-                      {:exit (exit-codes :success), :out (:path plan)}
-                      {:exit (exit-codes :success),
-                       :out (:path (note/create plan
-                                                {:reuse-empty? (:reuse-empty
-                                                                 options)}))}))
-                  {:exit (exit-codes :usage),
-                   :out "Usage: denote seq new parent|child SEQ|sibling SEQ"}))
-        "list"
-          (let [{:keys [sequences by-sequence]} (silo-sequences context)
-                prefix (first rest-args)
-                selected (selected-sequences sequences prefix options scheme)]
-            {:exit (exit-codes :success),
-             :out (str/join "\n"
-                            (map #(str % "\t" (:relative-path (by-sequence %)))
-                              (sequence/sort-sequences selected)))})
-        "tree" (let [{:keys [sequences by-sequence]} (silo-sequences context)
-                     prefix (first rest-args)
-                     selected
-                       (selected-sequences sequences prefix options scheme)
-                     base-depth (if prefix (sequence/depth prefix) 1)]
-                 {:exit (exit-codes :success),
-                  :out (str/join "\n"
-                                 (for [s (sequence/sort-sequences selected)
-                                       :let [indent (max 0
-                                                         (- (sequence/depth s)
-                                                            base-depth))]]
-                                   (str (apply str (repeat indent "  "))
-                                        s
-                                        "  "
-                                        (:relative-path (by-sequence s)))))})
-        "convert" (let [target (:to options)
-                        files rest-args]
-                    (if (and target (seq files))
-                      (let [plans
-                              (for [file files
-                                    :let [current (sequence/file-sequence file)]
-                                    :when current]
-                                (rename/plan-rename
-                                  file
-                                  {:signature (sequence/convert current target)}
-                                  context
-                                  {}))]
-                        (apply-or-confirm (vec plans) options))
-                      {:exit (exit-codes :usage),
-                       :out "Usage: denote seq convert FILE... --to SCHEME"}))
-        "reparent"
-          (let [[file target-sequence] rest-args]
-            (if (and file target-sequence)
-              (let [{:keys [sequences by-sequence]} (silo-sequences context)
-                    old-sequence (sequence/file-sequence file)
-                    new-sequence
-                      (sequence/next-child sequences target-sequence scheme)
-                    plans (into
-                            [(rename/plan-rename file
-                                                 {:signature new-sequence}
-                                                 context
-                                                 {})]
-                            (when (and (:recursive options) old-sequence)
-                              (for [descendant (sequence/relative sequences
-                                                                  old-sequence
-                                                                  :all-children
-                                                                  scheme)]
-                                (rename/plan-rename
-                                  (:path (by-sequence descendant))
-                                  {:signature (str new-sequence
-                                                   (subs descendant
-                                                         (count old-sequence)))}
-                                  context
-                                  {}))))]
-                (apply-or-confirm plans options))
-              {:exit (exit-codes :usage),
-               :out "Usage: denote seq reparent FILE TARGET-SEQUENCE"}))
-        "as-parent"
-          (let [file (first rest-args)]
-            (cond (nil? file) {:exit (exit-codes :usage),
-                               :out "Usage: denote seq as-parent FILE"}
-                  (sequence/file-sequence file)
-                    {:exit (exit-codes :validation),
-                     :out (str file " already has a sequence signature")}
-                  :else (let [{:keys [sequences]} (silo-sequences context)
-                              signature (sequence/next-parent sequences scheme)
-                              plan (rename/plan-rename file
-                                                       {:signature signature}
+      (let [context (make-context (merge-context-opts global-opts options)
+                                  harness)
+            scheme (scheme-from context options)]
+        (case subcommand
+          "next"
+            (let [[relation target] rest-args
+                  {:keys [sequences]} (silo-sequences context)
+                  result (next-for-relation sequences relation target scheme)]
+              (if result
+                {:exit (exit-codes :success), :out result}
+                {:exit (exit-codes :usage),
+                 :out "Usage: denote seq next parent|child SEQ|sibling SEQ"}))
+          "new" (let [[relation target] rest-args
+                      {:keys [sequences]} (silo-sequences context)
+                      signature
+                        (next-for-relation sequences relation target scheme)]
+                  (if signature
+                    (let [changes (assoc (new-changes-from-options options)
+                                    :signature signature)
+                          plan (note/plan-new changes context {})]
+                      (if (:dry-run options)
+                        {:exit (exit-codes :success), :out (:path plan)}
+                        {:exit (exit-codes :success),
+                         :out (:path (note/create plan
+                                                  {:reuse-empty?
+                                                   (:reuse-empty options)}))}))
+                    {:exit (exit-codes :usage),
+                     :out
+                     "Usage: denote seq new parent|child SEQ|sibling SEQ"}))
+          "list" (let [{:keys [sequences by-sequence]} (silo-sequences context)
+                       prefix (first rest-args)
+                       selected
+                         (selected-sequences sequences prefix options scheme)]
+                   {:exit (exit-codes :success),
+                    :out (str/join
+                           "\n"
+                           (map #(str % "\t" (:relative-path (by-sequence %)))
+                             (sequence/sort-sequences selected)))})
+          "tree" (let [{:keys [sequences by-sequence]} (silo-sequences context)
+                       prefix (first rest-args)
+                       selected
+                         (selected-sequences sequences prefix options scheme)
+                       base-depth (if prefix (sequence/depth prefix) 1)]
+                   {:exit (exit-codes :success),
+                    :out (str/join "\n"
+                                   (for [s (sequence/sort-sequences selected)
+                                         :let [indent (max 0
+                                                           (- (sequence/depth s)
+                                                              base-depth))]]
+                                     (str (apply str (repeat indent "  "))
+                                          s
+                                          "  "
+                                          (:relative-path (by-sequence s)))))})
+          "convert"
+            (let [target (:to options)
+                  files rest-args]
+              (if (and target (seq files))
+                (let [plans (for [file files
+                                  :let [current (sequence/file-sequence file)]
+                                  :when current]
+                              (rename/plan-rename
+                                file
+                                {:signature (sequence/convert current target)}
+                                context
+                                {}))]
+                  (apply-or-confirm (vec plans) options))
+                {:exit (exit-codes :usage),
+                 :out "Usage: denote seq convert FILE... --to SCHEME"}))
+          "reparent"
+            (let [[file target-sequence] rest-args]
+              (if (and file target-sequence)
+                (let [{:keys [sequences by-sequence]} (silo-sequences context)
+                      old-sequence (sequence/file-sequence file)
+                      new-sequence
+                        (sequence/next-child sequences target-sequence scheme)
+                      plans (into [(rename/plan-rename file
+                                                       {:signature new-sequence}
                                                        context
                                                        {})]
-                          (apply-or-confirm [plan] (assoc options :yes true)))))
-        {:exit (exit-codes :usage),
-         :out (str "Unknown seq subcommand: " subcommand)}))))
+                                  (when (and (:recursive options) old-sequence)
+                                    (for [descendant (sequence/relative
+                                                       sequences
+                                                       old-sequence
+                                                       :all-children
+                                                       scheme)]
+                                      (rename/plan-rename
+                                        (:path (by-sequence descendant))
+                                        {:signature
+                                         (str new-sequence
+                                              (subs descendant
+                                                    (count old-sequence)))}
+                                        context
+                                        {}))))]
+                  (apply-or-confirm plans options))
+                {:exit (exit-codes :usage),
+                 :out "Usage: denote seq reparent FILE TARGET-SEQUENCE"}))
+          "as-parent"
+            (let [file (first rest-args)]
+              (cond (nil? file) {:exit (exit-codes :usage),
+                                 :out "Usage: denote seq as-parent FILE"}
+                    (sequence/file-sequence file)
+                      {:exit (exit-codes :validation),
+                       :out (str file " already has a sequence signature")}
+                    :else
+                      (let [{:keys [sequences]} (silo-sequences context)
+                            signature (sequence/next-parent sequences scheme)
+                            plan (rename/plan-rename file
+                                                     {:signature signature}
+                                                     context
+                                                     {})]
+                        (apply-or-confirm [plan] (assoc options :yes true)))))
+          {:exit (exit-codes :usage),
+           :out (str "Unknown seq subcommand: " subcommand)})))))
 
 (defn- stderr-progress
   "Print one progress line to stderr immediately, keeping stdout clean
@@ -778,7 +837,9 @@ Commands:
         llm-opts (select-keys options [:model :max-rounds])]
     (if errors
       {:exit (exit-codes :usage), :out (str/join "\n" errors)}
-      (let [context (make-llm-wiki-context global-opts harness)]
+      (let [context (make-llm-wiki-context (merge-context-opts global-opts
+                                                               options)
+                                           harness)]
         (case subcommand
           "ingest" (if (seq rest-args)
                      (handle-ingest context options llm-opts rest-args)
@@ -874,19 +935,14 @@ Commands:
              (and (some #{"--help" "-h"} command-args) (command-help command))
                {:exit (exit-codes :success), :out (command-help command)}
              (= command "silo") (handle-silo options harness command-args)
-             (= command "find") (handle-find (make-context options harness)
-                                             command-args)
+             (= command "find") (handle-find options harness command-args)
              (= command "rename") (handle-rename options harness command-args)
-             (= command "new") (handle-new (make-context options harness)
-                                           command-args)
-             (= command "grep") (handle-grep (make-context options harness)
-                                             command-args)
+             (= command "new") (handle-new options harness command-args)
+             (= command "grep") (handle-grep options harness command-args)
              (= command "backlinks")
-               (handle-backlinks (make-context options harness) command-args)
-             (= command "links") (handle-links (make-context options harness)
-                                               command-args)
-             (= command "seq") (handle-seq (make-context options harness)
-                                           command-args)
+               (handle-backlinks options harness command-args)
+             (= command "links") (handle-links options harness command-args)
+             (= command "seq") (handle-seq options harness command-args)
              (= command "llm-wiki")
                (handle-llm-wiki options harness command-args)
              (= command "completions") (handle-completions command-args)

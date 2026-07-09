@@ -520,6 +520,111 @@
     (is (= 2 (:exit (run-cli "completions" "powershell"))))
     (is (= 2 (:exit (run-cli "completions"))))))
 
+(deftest context-options-after-subcommand
+  (testing "find --silo after the subcommand selects that silo"
+    (let [root (.getCanonicalPath (java.io.File. *work-root*))
+          {:keys [exit out]} (run-cli "find" "--silo" "work")]
+      (is (zero? exit))
+      (is (= [(str root "/20240301T000000--work-note__job.org")]
+             (str/split-lines out)))))
+  (testing "subcommand --silo wins over the global --silo"
+    (let [root (.getCanonicalPath (java.io.File. *work-root*))
+          {:keys [out]} (run-cli "--silo" "notes" "find" "--silo" "work")]
+      (is (= [(str root "/20240301T000000--work-note__job.org")]
+             (str/split-lines out)))))
+  (testing "new --silo plans inside the named silo"
+    (let [{:keys [exit out]} (run-cli "new" "--silo"
+                                      "work" "--title"
+                                      "Elsewhere" "--date"
+                                      "2025-05-05 05:05:05" "--dry-run")]
+      (is (zero? exit))
+      (is (str/starts-with? out
+                            (.getCanonicalPath (java.io.File. *work-root*))))))
+  (testing "grep --silo searches the named silo"
+    (spit (str *work-root* "/20240301T000000--work-note__job.org")
+          "work NEEDLE\n")
+    (let [{:keys [exit out]} (run-cli "grep" "NEEDLE" "--silo" "work")]
+      (is (zero? exit))
+      (is (str/includes? out "work-note__job.org:1:"))))
+  (testing "backlinks --silo resolves against the named silo"
+    (spit (str *notes-root* "/20240101T000000--alpha__clojure.org")
+          "Linking to [[denote:20240102T000000][beta]].\n")
+    (is (zero? (:exit (run-cli "backlinks" "20240102T000000"
+                               "--silo" "notes"))))
+    (is (= 6 (:exit (run-cli "backlinks" "20240102T000000" "--silo" "work")))))
+  (testing "links --silo resolves an identifier in the named silo"
+    (spit (str *notes-root* "/20240101T000000--alpha__clojure.org")
+          "Linking to [[denote:20240102T000000][beta]].\n")
+    (is (zero? (:exit (run-cli "links" "20240101T000000" "--silo" "notes")))))
+  (testing "--root after the subcommand works too"
+    (let [root (.getCanonicalPath (java.io.File. *work-root*))
+          {:keys [out]} (run-cli "find" "--root" *work-root*)]
+      (is (= [(str root "/20240301T000000--work-note__job.org")]
+             (str/split-lines out)))))
+  (testing "seq new parent --silo creates in the named silo"
+    (let [{:keys [exit out]} (run-cli "seq"
+                                      "new" "parent"
+                                      "--silo" "work"
+                                      "--title" "Work Root"
+                                      "--date" "2025-06-06 06:06:06")]
+      (is (zero? exit))
+      (is (str/starts-with? out
+                            (.getCanonicalPath (java.io.File. *work-root*))))))
+  (testing "--config after the subcommand loads that config"
+    (let [root (.getCanonicalPath (java.io.File. *notes-root*))
+          {:keys [exit out]} (cli/run ["find" "--config" *config-path*]
+                                      *harness*)]
+      (is (zero? exit))
+      (is (= 2 (count (str/split-lines out))))
+      (is (str/starts-with? (first (str/split-lines out)) root))))
+  (testing "rename accepts --silo without complaint"
+    (let [{:keys [exit]} (run-cli "rename"
+                                  (str *notes-root*
+                                       "/20240101T000000--alpha__clojure.org")
+                                  "--silo"
+                                  "notes" "--title"
+                                  "renamed" "--dry-run")]
+      (is (zero? exit))))
+  (testing "unknown silo after the subcommand lists configured silos"
+    (let [{:keys [exit out]} (run-cli "find" "--silo" "nope")]
+      (is (= 3 exit))
+      (is (str/includes? out "notes")))))
+
+(deftest llm-wiki-silo-after-subcommand
+  (let [wiki-a (temp-dir "denote-cli-wiki-a")
+        wiki-b (temp-dir "denote-cli-wiki-b")
+        config-path (str (temp-dir "denote-cli-wiki-config") "/config.edn")
+        _ (spit config-path
+                (pr-str {:default-silo :notes,
+                         :default-llm-wiki-silo :wikia,
+                         :silos {:notes {:path *notes-root*},
+                                 :wikia {:path wiki-a, :llm-wiki true},
+                                 :wikib {:path wiki-b, :llm-wiki true}}}))
+        run-wiki (fn [& args]
+                   (cli/run (into ["--config" config-path] args) *harness*))]
+    (testing "llm-wiki lint --silo after the subcommand matches the global form"
+      (let [global-form (cli/run ["--config" config-path "--silo" "wikib"
+                                  "llm-wiki" "lint"]
+                                 *harness*)
+            sub-form (run-wiki "llm-wiki" "lint" "--silo" "wikib")]
+        (is (not= 2 (:exit sub-form)))
+        (is (= global-form sub-form))))))
+
+(deftest context-options-in-help-and-completions
+  (testing "per-command help lists the context options"
+    (doseq [command ["find" "grep" "backlinks" "links" "new" "seq" "llm-wiki"
+                     "rename"]]
+      (let [{:keys [out]} (run-cli command "--help")]
+        (is (str/includes? out "--silo") command)
+        (is (str/includes? out "--root") command)
+        (is (str/includes? out "--config") command))))
+  (testing "fish completions offer --silo on subcommands"
+    (let [{:keys [out]} (run-cli "completions" "fish")]
+      (is
+        (str/includes?
+          out
+          "complete -c denote -n '__fish_seen_subcommand_from find' -l silo")))))
+
 (deftest silo-commands
   (testing "silo list shows names and paths"
     (let [{:keys [exit out]} (run-cli "silo" "list")]
