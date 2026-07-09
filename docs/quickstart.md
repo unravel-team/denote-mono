@@ -12,7 +12,7 @@ denote --version
 
 The script installs to `~/.local/bin` and offers to install the
 optional helper tools (`fzf`, `rg`, `fd`) at the end. Other install
-methods are in the [README](../README.md#installation).
+methods are in the [installation guide](installation.md).
 
 ## 2. Set up
 
@@ -108,5 +108,8 @@ denote seq tree
 - Several note directories ("silos")? Add them to the config and pick
   one per command with `--silo NAME` — see `denote help silos`.
 - Let an LLM distill your raw sources into an interlinked wiki:
-  the [LLM wiki section of the README](../README.md#llm-wiki).
-- The [README](../README.md) is the full manual.
+  the [LLM wiki guide](llm-wiki.md).
+- The full guides: [usage](usage.md) for every command,
+  [configuration](configuration.md) for the config file, and the
+  [README](../README.md) for the documentation index and command
+  reference.

@@ -88,7 +88,7 @@ sha256() {
 
 # Optional runtime tools: denote works without them, but they unlock
 # interactive selection (fzf), faster search (rg, fd), and PDF ingest
-# (pdftotext). See "Runtime tools" in the README.
+# (pdftotext). See "Runtime tools" in docs/installation.md.
 tool_hint() {
   case "$1" in
     fzf) echo "interactive selection for 'denote find' and 'denote grep'" ;;
