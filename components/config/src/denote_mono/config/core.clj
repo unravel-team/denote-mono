@@ -51,12 +51,20 @@
 
 (defn load-config
   "Read the EDN config at :path (default: config-path of :env) and
-  deep-merge it over the defaults. A missing file yields the defaults."
+  deep-merge it over the defaults. A missing file yields the defaults; a
+  file that fails to parse throws ex-info {:type :validation} naming it."
   [{:keys [path env]}]
   (let [path (or path (config-path env))
         f (io/file path)]
     (if (.isFile f)
-      (deep-merge default-config (edn/read-string (slurp f)))
+      (deep-merge default-config
+                  (try (edn/read-string (slurp f))
+                       (catch Exception e
+                         (throw (ex-info (str "Could not parse config file "
+                                                path
+                                              ": " (ex-message e))
+                                         {:type :validation, :path path}
+                                         e)))))
       default-config)))
 
 (defn merge-cli

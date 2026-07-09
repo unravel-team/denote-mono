@@ -50,11 +50,13 @@
                    (throw (ex-info (str "Unknown silo: " silo)
                                    {:type :validation, :silos (keys silos)})))
           root {:name nil, :path (fs/canonical (config/expand-home root env))}
-          :else
-            (or (when cwd (some (fn [[_ s]] (when (in-silo? cwd s) s)) silos))
-                (get silos (:default-silo cfg))
-                (throw (ex-info "No silo selected and no default configured"
-                                {:type :validation, :silos (keys silos)}))))))
+          :else (or (when cwd
+                      (some (fn [[_ s]] (when (in-silo? cwd s) s)) silos))
+                    (get silos (:default-silo cfg))
+                    (throw (ex-info "No silo selected and no default configured"
+                                    {:type :validation,
+                                     :silos (keys silos),
+                                     :hint :silo-selection}))))))
 
 (defn resolve-llm-wiki-silo
   "Resolve the llm-wiki silo a `denote llm-wiki` command operates in.

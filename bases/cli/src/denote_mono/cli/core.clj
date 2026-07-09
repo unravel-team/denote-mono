@@ -956,10 +956,12 @@ Commands:
         [subcommand silo-name] args]
     (case subcommand
       "list" {:exit (exit-codes :success),
-              :out (str/join "\n"
-                             (map (fn [[silo-key {:keys [path]}]]
-                                    (str (name silo-key) "\t" path))
-                               (sort-by key silos)))}
+              :out (if (seq silos)
+                     (str/join "\n"
+                               (map (fn [[silo-key {:keys [path]}]]
+                                      (str (name silo-key) "\t" path))
+                                 (sort-by key silos)))
+                     "No silos configured. Run 'denote init'.")}
       "path" (let [target (or (some-> silo-name
                                       keyword)
                               (:default-silo cfg))]
@@ -1037,7 +1039,12 @@ Commands:
           :out (str (ex-message e)
                     (when-let [silos (seq (:silos (ex-data e)))]
                       (str "\nConfigured silos: "
-                           (str/join ", " (map name silos)))))})))))
+                           (str/join ", " (map name silos))))
+                    ;; Components flag the failure kind in ex-data; the
+                    ;; CLI layer owns the flag spellings in the hint.
+                    (when (= :silo-selection (:hint (ex-data e)))
+                      (str "\nRun 'denote init' to create a config, or"
+                           " pass --silo NAME / --root PATH.")))})))))
 
 (defn- print-result
   "Print OUT for EXIT: stdout on success, stderr otherwise. Output

@@ -718,6 +718,37 @@
     (testing "completions know about init"
       (is (str/includes? (:out (run-cli "completions" "bash")) "init")))))
 
+(deftest actionable-error-messages
+  (testing "no silo selected points at denote init and the selectors"
+    (let [config-path (str (temp-dir "denote-cli-nodefault") "/config.edn")]
+      (spit config-path (pr-str {:silos {:notes {:path *notes-root*}}}))
+      (let [{:keys [exit out]} (cli/run ["--config" config-path "find"]
+                                        *harness*)]
+        (is (= 3 exit))
+        (is (str/includes? out "No silo selected"))
+        (is (str/includes? out "--silo"))))
+    (testing "and so does a missing config file"
+      (let [{:keys [exit out]}
+              (cli/run ["--config" "/nonexistent/config.edn" "find"] *harness*)]
+        (is (= 3 exit))
+        (is (str/includes? out "denote init")))))
+  (testing "silo list with no silos says so instead of printing nothing"
+    (let [config-path (str (temp-dir "denote-cli-nosilos") "/config.edn")]
+      (spit config-path (pr-str {:silos {}}))
+      (let [{:keys [exit out]} (cli/run ["--config" config-path "silo" "list"]
+                                        *harness*)]
+        (is (zero? exit))
+        (is (str/includes? out "No silos configured"))
+        (is (str/includes? out "denote init")))))
+  (testing "a config that fails to parse reports the file, not a stack trace"
+    (let [config-path (str (temp-dir "denote-cli-broken") "/config.edn")]
+      (spit config-path "{:default-silo :notes")
+      (let [{:keys [exit out]} (cli/run ["--config" config-path "find"]
+                                        *harness*)]
+        (is (= 3 exit))
+        (is (str/includes? out config-path))
+        (is (not (str/includes? out "clojure.lang")))))))
+
 (deftest silo-commands
   (testing "silo list shows names and paths"
     (let [{:keys [exit out]} (run-cli "silo" "list")]
