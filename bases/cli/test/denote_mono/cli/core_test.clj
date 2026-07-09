@@ -749,6 +749,57 @@
         (is (str/includes? out config-path))
         (is (not (str/includes? out "clojure.lang")))))))
 
+(deftest config-command
+  (testing "config path prints the resolved config file path"
+    (let [{:keys [exit out]} (run-cli "config" "path")]
+      (is (zero? exit))
+      (is (= *config-path* out))))
+  (testing "config path for a missing file prints it but exits no-match"
+    (let [missing (str (temp-dir "denote-cli-config-missing") "/config.edn")
+          {:keys [exit out]} (cli/run ["--config" missing "config" "path"]
+                                      *harness*)]
+      (is (= 6 exit))
+      (is (= missing out))))
+  (testing "config path honors XDG_CONFIG_HOME when no --config is given"
+    (let [xdg (temp-dir "denote-cli-config-xdg")
+          {:keys [out]} (cli/run ["config" "path"]
+                                 (assoc *harness*
+                                   :env {"XDG_CONFIG_HOME" xdg}))]
+      (is (= (str xdg "/denote-mono/config.edn") out))))
+  (testing "config show prints the effective merged config as EDN"
+    (let [{:keys [exit out]} (run-cli "config" "show")
+          shown (edn/read-string out)]
+      (is (zero? exit))
+      ;; user file wins where set, defaults fill the rest
+      (is (= :notes (:default-silo shown)))
+      (is (= *notes-root* (get-in shown [:silos :notes :path])))
+      (is (= :org (get-in shown [:filename :file-type])))
+      (is (contains? shown :llm))))
+  (testing "config show --json emits the same config as JSON"
+    (let [{:keys [exit out]} (run-cli "config" "show" "--json")
+          parsed (json/read-str out :key-fn keyword)]
+      (is (zero? exit))
+      (is (= "notes" (:default-silo parsed)))
+      (is (= *notes-root* (get-in parsed [:silos :notes :path])))))
+  (testing "config show reflects defaults when no file exists"
+    (let [missing (str (temp-dir "denote-cli-config-none") "/config.edn")
+          {:keys [exit out]} (cli/run ["--config" missing "config" "show"]
+                                      *harness*)
+          shown (edn/read-string out)]
+      (is (zero? exit))
+      (is (= {} (:silos shown)))))
+  (testing "unknown config subcommand is a usage error"
+    (is (= 2 (:exit (run-cli "config" "frobnicate")))))
+  (testing "config answers --help with its subcommands"
+    (let [{:keys [exit out]} (run-cli "config" "--help")]
+      (is (zero? exit))
+      (is (str/includes? out "Usage: denote config"))
+      (is (str/includes? out "show"))
+      (is (str/includes? out "path"))))
+  (testing "completions know about config"
+    (is (str/includes? (:out (run-cli "completions" "fish"))
+                       "__fish_seen_subcommand_from config"))))
+
 (deftest silo-commands
   (testing "silo list shows names and paths"
     (let [{:keys [exit out]} (run-cli "silo" "list")]

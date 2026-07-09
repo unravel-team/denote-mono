@@ -4,6 +4,7 @@
   only in -main."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
+            [clojure.pprint :as pprint]
             [clojure.string :as str]
             [clojure.tools.cli :as tools-cli]
             [denote-mono.cli.completions :as completions]
@@ -71,6 +72,8 @@ Commands:
   silo list        List configured silos
   silo path [NAME] Print the path of a silo
   silo doctor      Check that configured silos exist
+  config show      Print the effective config as EDN (--json)
+  config path      Print the config file path
   completions SH   Print a completion script for bash, zsh, or fish
   help             Show this help text.")
 
@@ -611,6 +614,12 @@ Commands:
          [nil "--max-rounds N" "Cap agentic tool rounds" :parse-fn parse-long]]
         context-options))
 
+(def ^:private config-options
+  ;; No --silo/--root here: config show/path are about the configuration
+  ;; itself, not any silo context. --config picks the file to inspect.
+  [[nil "--json" "JSON output (show)"]
+   [nil "--config PATH" "Config file path"]])
+
 (def ^:private command-spec
   "Command surface used for dispatch documentation, per-command --help,
   and completion scripts."
@@ -657,6 +666,11 @@ Commands:
     :description "Silo operations",
     :options [],
     :subcommands ["doctor" "list" "path"]}
+   {:name "config",
+    :usage "config show | path [OPTIONS]",
+    :description "Configuration operations",
+    :options config-options,
+    :subcommands ["path" "show"]}
    {:name "completions",
     :usage "completions bash|zsh|fish",
     :description "Print a shell completion script",
@@ -985,6 +999,29 @@ Commands:
       {:exit (exit-codes :usage),
        :out "Usage: denote silo list|path [NAME]|doctor"})))
 
+(defn- handle-config
+  [global-opts {:keys [env]} args]
+  (let [{:keys [options arguments errors]} (tools-cli/parse-opts args
+                                                                 config-options)
+        [subcommand] arguments
+        global-opts (merge-context-opts global-opts options)
+        config-file (or (:config global-opts) (config/config-path env))]
+    (cond errors {:exit (exit-codes :usage), :out (str/join "\n" errors)}
+          ;; The path prints either way; the exit code lets scripts test
+          ;; existence (print-result sends the no-match case to stderr).
+          (= subcommand "path") {:exit (if (.isFile (io/file config-file))
+                                         (exit-codes :success)
+                                         (exit-codes :no-match)),
+                                 :out config-file}
+          (= subcommand "show")
+            (let [cfg (load-validated-config global-opts env)]
+              {:exit (exit-codes :success),
+               :out (if (:json options)
+                      (json/write-str cfg)
+                      (str/trimr (with-out-str (pprint/pprint cfg))))})
+          :else {:exit (exit-codes :usage),
+                 :out "Usage: denote config show|path"})))
+
 (defn- stderr-tty?
   "True when stderr is attached to a terminal, even with stdin/stdout
   redirected (e.g. under xargs). The JVM has no isatty, so ask the shell
@@ -1021,6 +1058,7 @@ Commands:
              ;; the config, so a missing or broken file cannot block it.
              (= command "init") (handle-init options harness command-args)
              (= command "silo") (handle-silo options harness command-args)
+             (= command "config") (handle-config options harness command-args)
              (= command "find") (handle-find options harness command-args)
              (= command "rename") (handle-rename options harness command-args)
              (= command "new") (handle-new options harness command-args)

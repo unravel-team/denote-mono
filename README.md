@@ -186,8 +186,9 @@ default, and (optionally) tune the `:llm` provider map:
 
 Everything else has sensible defaults: filename component order, keyword
 sorting, default file type, exclusion regexes, front-matter behavior,
-sequence scheme, and external tool argv vectors. The full set lives in
-the `config` component (`components/config`).
+sequence scheme, and external tool argv vectors. Run `denote config
+show` to see the effective config, defaults included (`denote config
+path` prints the file's location).
 
 Silo selection for a command: `--silo NAME`, then `--root PATH`, then the
 silo containing the current directory, then `:default-silo`. The
