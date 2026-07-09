@@ -2,7 +2,7 @@
 
 Date: 2026-06-15
 
-[<- Prev](0012-run-the-llm-wiki-agent-in-process-with-deterministic-tools.md)
+[<- Prev](0012-run-the-llm-wiki-agent-in-process-with-deterministic-tools.md) | [Next ->](0014-accept-context-options-before-or-after-the-subcommand.md)
 
 ## Status
 

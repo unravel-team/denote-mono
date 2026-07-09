@@ -12,3 +12,8 @@
 * [Distribute as a GraalVM native image with build-time Clojure initialization](0010-distribute-as-a-graalvm-native-image-with-build-time-clojure-initialization.md)
 * [Compute the version at build time and embed it as a resource](0011-compute-the-version-at-build-time-and-embed-it-as-a-resource.md)
 * [Run the llm-wiki agent in-process with deterministic tools](0012-run-the-llm-wiki-agent-in-process-with-deterministic-tools.md)
+* [Run the llm-wiki agent on DSCloj ReAct](0013-run-the-llm-wiki-agent-on-dscloj-react.md)
+* [Accept context options before or after the subcommand](0014-accept-context-options-before-or-after-the-subcommand.md)
+* [Dispatch first-run commands before configuration loading](0015-dispatch-first-run-commands-before-configuration-loading.md)
+* [Signal remediation hints as ex-data and render them in the CLI](0016-signal-remediation-hints-as-ex-data-and-render-them-in-the-cli.md)
+* [Structure user docs as a README index over self-contained guides](0017-structure-user-docs-as-a-readme-index-over-self-contained-guides.md)
