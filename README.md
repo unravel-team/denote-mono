@@ -15,6 +15,9 @@ and compose with ordinary Unix tools: list, filter, search, create,
 rename, organize into Folgezettel hierarchies, and maintain an
 LLM-curated wiki — all from the shell.
 
+New here? The **[5-minute quickstart](docs/quickstart.md)** takes you
+from install to linked, searchable notes.
+
 This file is the user manual. Development documentation lives at the
 end, and architecture decisions in [docs/adr](docs/adr/README.md).
 
@@ -420,13 +423,12 @@ inside it.
 
 ## Try it out
 
-A self-contained smoke test (throwaway silo in `/tmp`, no config file
-needed):
+The [quickstart](docs/quickstart.md) walks through the full flow. For a
+self-contained smoke test that touches nothing in your home directory,
+point `--config` at a throwaway silo in `/tmp`:
 
 ```sh
-mkdir -p /tmp/denote-demo/notes
-echo '{:default-silo :demo :silos {:demo {:path "/tmp/denote-demo/notes"}}}' \
-  > /tmp/denote-demo/config.edn
+denote init --config /tmp/denote-demo/config.edn --path /tmp/denote-demo/notes
 alias d='denote --config /tmp/denote-demo/config.edn'
 
 d new --title "My first note" --keyword demo --keyword clojure
@@ -437,7 +439,7 @@ d seq new parent --title "Project X"
 d seq new child 1 --title "Design"
 d seq tree
 d rename /tmp/denote-demo/notes/<file>.org --title "Renamed" --dry-run
-d silo doctor
+d doctor
 ```
 
 ## Development
